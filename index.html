@@ -68,7 +68,7 @@
                 <div class="p-4 border-t border-gray-100">
                     <form id="chatForm" class="flex gap-2 items-center">
                         <button type="button" id="voiceBtn" 
-                                class="w-10 h-10 flex items-center justify-center rounded-full bg-gray-100 hover:bg-blue-100 text-gray-500 hover:text-blue-600 transition-all disabled:opacity-50"
+                                class="w-10 h-10 hidden items-center justify-center rounded-full bg-gray-100 hover:bg-blue-100 text-gray-500 hover:text-blue-600 transition-all disabled:opacity-50"
                                 disabled title="语音输入">
                             <i class="fas fa-microphone"></i>
                         </button>
@@ -120,7 +120,7 @@
                     <button id="refreshModels" class="text-xs text-blue-600 mt-1 hover:underline">刷新模型列表</button>
                 </div>
                 <hr class="border-gray-100">
-                <div class="space-y-3">
+                <div class="space-y-3 hidden">
                     <h3 class="text-sm font-bold text-gray-800">火山引擎语音识别设置 (ASR)</h3>
                     <div>
                         <label class="block text-sm font-medium text-gray-700 mb-1">AppID</label>
@@ -138,7 +138,7 @@
                                class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none">
                     </div>
                 </div>
-                <hr class="border-gray-100">
+                <hr class="border-gray-100 hidden">
                 <div class="space-y-3">
                     <h3 class="text-sm font-bold text-gray-800">火山引擎语音合成设置 (TTS)</h3>
                     <div>
@@ -155,7 +155,7 @@
                     </div>
                     <div>
                         <label class="block text-sm font-medium text-gray-700 mb-1">默认音色 (Voice Type)</label>
-                        <input type="text" id="volcTtsVoice" placeholder="例如: BV001_streaming" 
+                        <input type="text" id="volcTtsVoice" placeholder="例如: zh_female_vv_uranus_bigtts" 
                                class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none">
                     </div>
                 </div>
@@ -224,7 +224,7 @@
             volcTtsToken: localStorage.getItem('volc_tts_token') || '',
             volcCluster: localStorage.getItem('volc_cluster') || 'volc.bigasr.auc',
             volcTtsCluster: localStorage.getItem('volc_tts_cluster') || 'volcano_tts',
-            volcTtsVoice: localStorage.getItem('volc_tts_voice') || 'BV001_streaming',
+            volcTtsVoice: localStorage.getItem('volc_tts_voice') || 'zh_female_vv_uranus_bigtts',
             allModels: [], // Store all fetched models for filtering
             roles: [
                 { id: 'coach', name: '专业健身教练', desc: '充满动力的科学指导者', prompt: 'You are a professional fitness coach with 10 years of experience. You are enthusiastic, positive, and speak with high motivation. You provide scientific training advice and nutritional guidance while constantly encouraging the user to persevere. Your responses should be professional, practical, and full of positive energy. Please respond in Chinese.', icon: '💪' },
@@ -736,7 +736,7 @@ Respond ONLY with the JSON object. Do not include markdown code blocks.`;
                 return;
             }
 
-            const voiceType = state.volcTtsVoice || 'BV001_streaming';
+            const voiceType = state.volcTtsVoice || 'zh_female_vv_uranus_bigtts';
             const cacheKey = text + '_' + voiceType;
 
             const icon = btn.querySelector('i');

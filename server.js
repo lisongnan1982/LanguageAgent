@@ -73,7 +73,7 @@ app.post('/api/tts', async (req, res) => {
             app: { appid, token, cluster: cluster || 'volcano_tts' },
             user: { uid: 'roleplay_user' },
             audio: {
-                voice_type: voice_type || 'BV001_streaming',
+                voice_type: voice_type || 'zh_female_vv_uranus_bigtts',
                 encoding: 'mp3',
                 speed_ratio: 1.0,
                 volume_ratio: 1.0,
@@ -90,7 +90,7 @@ app.post('/api/tts', async (req, res) => {
         console.log('Submitting TTS request to Volcengine...');
         console.log('AppID:', appid);
         console.log('Cluster:', cluster || 'volcano_tts');
-        console.log('Voice Type:', voice_type || 'BV001_streaming');
+        console.log('Voice Type:', voice_type || 'zh_female_vv_uranus_bigtts');
 
         const response = await axios.post(tts_url, requestData, {
             headers: {
@@ -249,5 +249,5 @@ app.post('/api/asr', upload.single('audio'), async (req, res) => {
 });
 
 app.listen(PORT, () => {
-    console.log(`服务器运行在 http://0.0.0.0:${PORT}`);
+    console.log(`服务器运行在 http://localhost:${PORT}`);
 });
