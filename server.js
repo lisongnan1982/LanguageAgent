@@ -249,5 +249,5 @@ app.post('/api/asr', upload.single('audio'), async (req, res) => {
 });
 
 app.listen(PORT, () => {
-    console.log(`服务器运行在 http://localhost:${PORT}`);
+    console.log(`服务器运行在 http://8.210.248.146:${PORT}`);
 });
