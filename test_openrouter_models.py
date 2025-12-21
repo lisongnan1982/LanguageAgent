@@ -50,7 +50,7 @@ def classify_response(text):
         return "Ambiguous"
     return "Allows"
 
-def call_model(api_key, model, prompt, base_url="https://api.openrouter.ai/v1"):
+def call_model(api_key, model, prompt, base_url="https://openrouter.ai/api/v1"):
     url = f"{base_url}/chat/completions"
     headers = {
         "Authorization": f"Bearer {api_key}",
@@ -70,7 +70,8 @@ def call_model(api_key, model, prompt, base_url="https://api.openrouter.ai/v1"):
     return resp.json()
 
 def run_tests(models, base_url=None, sleep=1.0):
-    api_key = os.getenv("OPENROUTER_API_KEY")
+    # api_key = os.getenv("OPENROUTER_API_KEY")
+    api_key = "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"
     if not api_key:
         print("ERROR: set OPENROUTER_API_KEY in your environment", file=sys.stderr)
         sys.exit(1)
@@ -80,7 +81,7 @@ def run_tests(models, base_url=None, sleep=1.0):
         print(f"\n=== Testing model: {model} ===")
         for cat, prompt in TEST_PROMPTS.items():
             try:
-                r = call_model(api_key, model, prompt, base_url=base_url or "https://api.openrouter.ai/v1")
+                r = call_model(api_key, model, prompt, base_url=base_url or "https://openrouter.ai/api/v1")
                 # Try common response path: look for choices/outputs
                 text = None
                 if isinstance(r, dict):

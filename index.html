@@ -1,0 +1,667 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RolePlay Chat - AI 角色扮演</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+        body { font-family: 'Inter', 'PingFang SC', sans-serif; }
+        .chat-container { height: calc(100vh - 180px); }
+        .scrollbar-hide::-webkit-scrollbar { display: none; }
+        .scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
+        .message-content p { margin-bottom: 0.5rem; }
+        .message-content p:last-child { margin-bottom: 0; }
+        .role-card.active { border-color: #3b82f6; background-color: #eff6ff; }
+    </style>
+</head>
+<body class="bg-gray-50 text-gray-900">
+    <!-- Login Overlay -->
+    <div id="loginOverlay" class="fixed inset-0 bg-white z-[100] flex items-center justify-center">
+        <div class="bg-white p-8 rounded-2xl shadow-xl border border-gray-100 w-full max-w-sm text-center">
+            <div class="w-16 h-16 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center mx-auto mb-6 text-2xl">
+                <i class="fas fa-lock"></i>
+            </div>
+            <h2 class="text-2xl font-bold mb-2">欢迎回来</h2>
+            <p class="text-gray-500 mb-6 text-sm">请输入访问密码以继续</p>
+            <form id="loginForm" class="space-y-4">
+                <input type="password" id="loginPassword" placeholder="访问密码" 
+                       class="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all">
+                <button type="submit" class="w-full bg-blue-600 text-white py-3 rounded-xl font-semibold hover:bg-blue-700 transition-colors shadow-lg shadow-blue-200">
+                    登录
+                </button>
+            </form>
+            <p id="loginError" class="text-red-500 text-xs mt-4 hidden">密码不正确，请重试</p>
+        </div>
+    </div>
+
+    <div class="max-w-6xl mx-auto h-screen flex flex-col p-4">
+        <!-- Header -->
+        <header class="flex justify-between items-center mb-6 px-4">
+            <h1 class="text-2xl font-bold text-blue-600"><i class="fas fa-mask mr-2"></i>RolePlay Chat</h1>
+            <button id="settingsBtn" class="p-2 rounded-full hover:bg-gray-200 transition-colors">
+                <i class="fas fa-cog text-xl text-gray-600"></i>
+            </button>
+        </header>
+
+        <div class="flex flex-1 gap-6 overflow-hidden">
+            <!-- Sidebar: Roles -->
+            <aside class="w-1/4 flex flex-col gap-4 overflow-y-auto pr-2 scrollbar-hide">
+                <div class="flex justify-between items-center">
+                    <h2 class="font-semibold text-gray-700">角色选择</h2>
+                    <button id="addRoleBtn" class="text-sm text-blue-600 hover:text-blue-800"><i class="fas fa-plus mr-1"></i>创建</button>
+                </div>
+                <div id="roleList" class="flex flex-col gap-3">
+                    <!-- Roles will be injected here -->
+                </div>
+            </aside>
+
+            <!-- Main Chat Area -->
+            <main class="flex-1 flex flex-col bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
+                <!-- Chat Header -->
+                <div id="activeRoleHeader" class="p-4 border-b border-gray-100 bg-gray-50 flex items-center gap-3">
+                    <div class="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center text-blue-600 font-bold">
+                        ?
+                    </div>
+                    <div class="flex-1">
+                        <h3 class="font-bold text-gray-800" id="activeRoleName">请选择角色</h3>
+                        <p class="text-xs text-gray-500" id="activeRoleDesc">开始您的对话</p>
+                    </div>
+                    <button id="clearChatBtn" class="p-2 text-gray-400 hover:text-red-500 transition-colors hidden" title="清空当前对话">
+                        <i class="fas fa-trash-alt"></i>
+                    </button>
+                </div>
+
+                <!-- Messages -->
+                <div id="chatMessages" class="flex-1 overflow-y-auto p-6 flex flex-col gap-4 chat-container">
+                    <div class="text-center text-gray-400 mt-10">
+                        <i class="fas fa-comments text-4xl mb-4"></i>
+                        <p>选择一个角色开始聊天吧</p>
+                    </div>
+                </div>
+
+                <!-- Input Area -->
+                <div class="p-4 border-t border-gray-100">
+                    <form id="chatForm" class="flex gap-2 items-center">
+                        <button type="button" id="voiceBtn" 
+                                class="w-10 h-10 flex items-center justify-center rounded-full bg-gray-100 hover:bg-blue-100 text-gray-500 hover:text-blue-600 transition-all disabled:opacity-50"
+                                disabled title="语音输入">
+                            <i class="fas fa-microphone"></i>
+                        </button>
+                        <input type="text" id="userInput" placeholder="输入消息..." 
+                               class="flex-1 px-4 py-2 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100" 
+                               disabled>
+                        <button type="submit" id="sendBtn" 
+                                class="bg-blue-600 text-white px-6 py-2 rounded-xl hover:bg-blue-700 transition-colors disabled:bg-gray-400" 
+                                disabled>
+                            <i class="fas fa-paper-plane"></i>
+                        </button>
+                    </form>
+                    <div id="recordingStatus" class="hidden text-center mt-2">
+                        <span class="inline-flex items-center px-3 py-1 rounded-full bg-red-100 text-red-600 text-xs font-medium animate-pulse">
+                            <i class="fas fa-circle mr-2"></i> 正在录音... 点击按钮停止
+                        </span>
+                    </div>
+                </div>
+            </main>
+        </div>
+    </div>
+
+    <!-- Settings Modal -->
+    <div id="settingsModal" class="fixed inset-0 bg-black bg-opacity-50 hidden flex items-center justify-center z-50">
+        <div class="bg-white rounded-2xl p-6 w-full max-w-md shadow-xl">
+            <h2 class="text-xl font-bold mb-4">API 设置</h2>
+            <div class="space-y-4">
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">OpenRouter API Key</label>
+                    <div class="flex gap-2">
+                        <input type="password" id="apiKeyInput" placeholder="sk-or-v1-..." 
+                               class="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none">
+                        <button id="verifyKey" class="px-3 py-2 bg-gray-100 hover:bg-gray-200 rounded-lg text-sm transition-colors">验证并加载</button>
+                    </div>
+                    <p class="text-xs text-gray-400 mt-1">Key 将保存在您的浏览器本地存储中</p>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">选择模型</label>
+                    <input type="text" id="modelSearch" placeholder="搜索模型 (如: gpt-4, claude)..." 
+                           class="w-full px-4 py-2 border border-gray-300 rounded-t-lg focus:ring-2 focus:ring-blue-500 outline-none border-b-0 text-sm">
+                    <select id="modelSelect" size="5" class="w-full px-2 py-1 border border-gray-300 rounded-b-lg focus:ring-2 focus:ring-blue-500 outline-none bg-white">
+                        <option value="openai/gpt-3.5-turbo">Loading models...</option>
+                    </select>
+                    <button id="refreshModels" class="text-xs text-blue-600 mt-1 hover:underline">刷新模型列表</button>
+                </div>
+                <hr class="border-gray-100">
+                <div class="space-y-3">
+                    <h3 class="text-sm font-bold text-gray-800">火山引擎语音识别设置 (ASR)</h3>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">AppID</label>
+                        <input type="text" id="volcAppId" placeholder="火山引擎 AppID" 
+                               class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Access Token</label>
+                        <input type="password" id="volcToken" placeholder="火山引擎 Access Token" 
+                               class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none">
+                    </div>
+                </div>
+                <div class="flex justify-end gap-3 mt-6">
+                    <button id="closeSettings" class="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded-lg">关闭</button>
+                    <button id="saveSettings" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">保存</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Create Role Modal -->
+    <div id="roleModal" class="fixed inset-0 bg-black bg-opacity-50 hidden flex items-center justify-center z-50">
+        <div class="bg-white rounded-2xl p-6 w-full max-w-md shadow-xl">
+            <h2 class="text-xl font-bold mb-4">创建新角色</h2>
+            <div class="space-y-4">
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">角色名称</label>
+                    <input type="text" id="newRoleName" placeholder="例如：福尔摩斯" 
+                           class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">角色描述 (简短)</label>
+                    <input type="text" id="newRoleDesc" placeholder="例如：伟大的侦探" 
+                           class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">提示词 (System Prompt)</label>
+                    <textarea id="newRolePrompt" rows="4" placeholder="描述角色的性格、说话方式和背景..." 
+                              class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"></textarea>
+                </div>
+                <div class="flex justify-end gap-3 mt-6">
+                    <button id="closeRoleModal" class="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded-lg">取消</button>
+                    <button id="saveRole" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">保存角色</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // State Management
+        const state = {
+            apiKey: localStorage.getItem('openrouter_api_key') || '',
+            selectedModel: localStorage.getItem('selected_model') || 'x-ai/grok-4.1-fast',
+            volcAppId: localStorage.getItem('volc_appid') || '',
+            volcToken: localStorage.getItem('volc_token') || '',
+            allModels: [], // Store all fetched models for filtering
+            roles: [
+                { id: 'coach', name: '专业健身教练', desc: '充满动力的科学指导者', prompt: 'You are a professional fitness coach with 10 years of experience. You are enthusiastic, positive, and speak with high motivation. You provide scientific training advice and nutritional guidance while constantly encouraging the user to persevere. Your responses should be professional, practical, and full of positive energy. Please respond in Chinese.', icon: '💪' },
+                { id: 'bartender', name: '赛博朋克调酒师', desc: '反乌托邦世界的倾听者', prompt: 'You are a bartender under the neon lights of a cyberpunk metropolis in the year 2077. You have seen the highs and lows of human nature and speak with a hint of world-weariness and humor. You are an excellent listener, chatting with customers about life, technology, and this broken world while wiping glasses. Your responses should be emotional and carry a sci-fi atmosphere. Please respond in Chinese.', icon: '🍸' },
+                ...(JSON.parse(localStorage.getItem('custom_roles')) || [])
+            ],
+            currentRoleId: null,
+            chatHistory: JSON.parse(localStorage.getItem('chat_history')) || {} // roleId -> messages[]
+        };
+
+        // DOM Elements
+        const elements = {
+            loginOverlay: document.getElementById('loginOverlay'),
+            loginForm: document.getElementById('loginForm'),
+            loginPassword: document.getElementById('loginPassword'),
+            loginError: document.getElementById('loginError'),
+
+            settingsBtn: document.getElementById('settingsBtn'),
+            settingsModal: document.getElementById('settingsModal'),
+            closeSettings: document.getElementById('closeSettings'),
+            saveSettings: document.getElementById('saveSettings'),
+            apiKeyInput: document.getElementById('apiKeyInput'),
+            verifyKey: document.getElementById('verifyKey'),
+            modelSearch: document.getElementById('modelSearch'),
+            modelSelect: document.getElementById('modelSelect'),
+            refreshModels: document.getElementById('refreshModels'),
+            
+            roleList: document.getElementById('roleList'),
+            addRoleBtn: document.getElementById('addRoleBtn'),
+            roleModal: document.getElementById('roleModal'),
+            closeRoleModal: document.getElementById('closeRoleModal'),
+            saveRole: document.getElementById('saveRole'),
+            newRoleName: document.getElementById('newRoleName'),
+            newRoleDesc: document.getElementById('newRoleDesc'),
+            newRolePrompt: document.getElementById('newRolePrompt'),
+
+            chatMessages: document.getElementById('chatMessages'),
+            chatForm: document.getElementById('chatForm'),
+            userInput: document.getElementById('userInput'),
+            sendBtn: document.getElementById('sendBtn'),
+            voiceBtn: document.getElementById('voiceBtn'),
+            recordingStatus: document.getElementById('recordingStatus'),
+            volcAppId: document.getElementById('volcAppId'),
+            volcToken: document.getElementById('volcToken'),
+            activeRoleName: document.getElementById('activeRoleName'),
+            activeRoleDesc: document.getElementById('activeRoleDesc'),
+            activeRoleHeader: document.getElementById('activeRoleHeader'),
+            clearChatBtn: document.getElementById('clearChatBtn')
+        };
+
+        // Initialize
+        async function init() {
+            // Check backend auth status
+            try {
+                const resp = await fetch('/api/check-auth');
+                const data = await resp.json();
+                if (data.isLoggedIn) {
+                    elements.loginOverlay.classList.add('hidden');
+                }
+            } catch (e) {
+                console.log('Running in local mode');
+            }
+
+            renderRoles();
+            elements.apiKeyInput.value = state.apiKey;
+            elements.volcAppId.value = state.volcAppId;
+            elements.volcToken.value = state.volcToken;
+            if (state.apiKey) {
+                fetchModels();
+            }
+            setupEventListeners();
+        }
+
+        function setupEventListeners() {
+            elements.loginForm.onsubmit = async (e) => {
+                e.preventDefault();
+                const pass = elements.loginPassword.value;
+                
+                try {
+                    const resp = await fetch('/api/login', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ password: pass })
+                    });
+                    
+                    if (resp.ok) {
+                        elements.loginOverlay.classList.add('hidden');
+                    } else {
+                        elements.loginError.classList.remove('hidden');
+                        elements.loginPassword.value = '';
+                    }
+                } catch (err) {
+                    // Fallback for direct file opening
+                    if (pass === '888') {
+                        elements.loginOverlay.classList.add('hidden');
+                    } else {
+                        elements.loginError.classList.remove('hidden');
+                    }
+                }
+            };
+
+            elements.settingsBtn.onclick = () => {
+                elements.apiKeyInput.value = state.apiKey;
+                elements.settingsModal.classList.remove('hidden');
+            };
+            elements.closeSettings.onclick = () => elements.settingsModal.classList.add('hidden');
+            elements.saveSettings.onclick = () => {
+                state.apiKey = elements.apiKeyInput.value;
+                state.selectedModel = elements.modelSelect.value;
+                state.volcAppId = elements.volcAppId.value;
+                state.volcToken = elements.volcToken.value;
+                localStorage.setItem('openrouter_api_key', state.apiKey);
+                localStorage.setItem('selected_model', state.selectedModel);
+                localStorage.setItem('volc_appid', state.volcAppId);
+                localStorage.setItem('volc_token', state.volcToken);
+                elements.settingsModal.classList.add('hidden');
+                checkInputs();
+            };
+
+            elements.verifyKey.onclick = () => {
+                state.apiKey = elements.apiKeyInput.value;
+                fetchModels();
+            };
+            elements.refreshModels.onclick = fetchModels;
+
+            elements.modelSearch.oninput = () => {
+                const term = elements.modelSearch.value.toLowerCase();
+                renderModelOptions(state.allModels.filter(m => 
+                    m.id.toLowerCase().includes(term) || 
+                    (m.name && m.name.toLowerCase().includes(term))
+                ));
+            };
+
+            elements.addRoleBtn.onclick = () => elements.roleModal.classList.remove('hidden');
+            elements.closeRoleModal.onclick = () => elements.roleModal.classList.add('hidden');
+            elements.saveRole.onclick = createRole;
+
+            elements.chatForm.onsubmit = (e) => {
+                e.preventDefault();
+                sendMessage();
+            };
+
+            elements.clearChatBtn.onclick = () => {
+                if (state.currentRoleId && confirm('确定要清空与当前角色的对话记录吗？')) {
+                    state.chatHistory[state.currentRoleId] = [];
+                    saveChatHistory();
+                    renderMessages();
+                }
+            };
+
+            // Voice Recognition Logic
+            let mediaRecorder;
+            let audioChunks = [];
+
+            elements.voiceBtn.onclick = async () => {
+                if (mediaRecorder && mediaRecorder.state === 'recording') {
+                    mediaRecorder.stop();
+                    elements.recordingStatus.classList.add('hidden');
+                    elements.voiceBtn.classList.remove('bg-red-500', 'text-white');
+                    return;
+                }
+
+                try {
+                    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                    mediaRecorder = new MediaRecorder(stream);
+                    audioChunks = [];
+
+                    mediaRecorder.ondataavailable = (event) => {
+                        audioChunks.push(event.data);
+                    };
+
+                    mediaRecorder.onstop = async () => {
+                        const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
+                        await handleVoiceUpload(audioBlob);
+                        stream.getTracks().forEach(track => track.stop());
+                    };
+
+                    mediaRecorder.start();
+                    elements.recordingStatus.classList.remove('hidden');
+                    elements.voiceBtn.classList.add('bg-red-500', 'text-white');
+                } catch (err) {
+                    alert('无法访问麦克风，请确保已授予权限。');
+                    console.error(err);
+                }
+            };
+
+            async function handleVoiceUpload(blob) {
+                if (!state.volcAppId || !state.volcToken) {
+                    alert('请先在设置中配置火山引擎 AppID 和 Access Token');
+                    return;
+                }
+
+                elements.userInput.placeholder = "正在识别语音...";
+                elements.userInput.disabled = true;
+
+                const formData = new FormData();
+                formData.append('audio', blob);
+                formData.append('appid', state.volcAppId);
+                formData.append('token', state.volcToken);
+
+                try {
+                    const resp = await fetch('/api/asr', {
+                        method: 'POST',
+                        body: formData
+                    });
+                    const data = await resp.json();
+                    if (data.text) {
+                        elements.userInput.value = data.text;
+                    } else {
+                        alert('识别失败: ' + (data.message || '未知错误'));
+                    }
+                } catch (err) {
+                    console.error(err);
+                    alert('识别过程中发生网络错误');
+                } finally {
+                    elements.userInput.disabled = false;
+                    elements.userInput.placeholder = "输入消息...";
+                }
+            }
+        }
+
+        function saveChatHistory() {
+            localStorage.setItem('chat_history', JSON.stringify(state.chatHistory));
+        }
+
+        async function fetchModels() {
+            const keyToUse = elements.apiKeyInput.value || state.apiKey;
+            if (!keyToUse) {
+                alert('请先输入 API Key');
+                return;
+            }
+            elements.modelSelect.innerHTML = '<option>正在获取模型...</option>';
+            try {
+                const response = await fetch('https://openrouter.ai/api/v1/models', {
+                    headers: { 'Authorization': `Bearer ${keyToUse}` }
+                });
+                const data = await response.json();
+                if (data.data && Array.isArray(data.data)) {
+                    state.allModels = data.data;
+                    renderModelOptions(state.allModels);
+                } else {
+                    throw new Error('API 返回格式错误');
+                }
+            } catch (error) {
+                console.error(error);
+                const fallbackModels = [
+                    { id: 'x-ai/grok-4.1-fast', name: 'Grok 4.1 Fast' },
+                    { id: 'x-ai/grok-2-1212', name: 'Grok 2 (1212)' },
+                    { id: 'google/gemini-flash-1.5', name: 'Gemini Flash 1.5' }
+                ];
+                state.allModels = fallbackModels;
+                renderModelOptions(fallbackModels);
+                alert('获取模型列表失败，请检查 API Key 是否正确。已加载常用备选列表。');
+            }
+        }
+
+        function renderModelOptions(models) {
+            elements.modelSelect.innerHTML = '';
+            models.forEach(model => {
+                const option = document.createElement('option');
+                option.value = model.id;
+                option.textContent = model.name || model.id;
+                option.className = "py-1 px-2 hover:bg-blue-50";
+                if (model.id === state.selectedModel) option.selected = true;
+                elements.modelSelect.appendChild(option);
+            });
+            if (models.length === 0) {
+                elements.modelSelect.innerHTML = '<option disabled>未找到匹配模型</option>';
+            }
+        }
+
+        function renderRoles() {
+            elements.roleList.innerHTML = '';
+            state.roles.forEach(role => {
+                const isCustom = String(role.id).startsWith('custom-');
+                const div = document.createElement('div');
+                div.className = `role-card p-3 border border-gray-200 rounded-xl cursor-pointer hover:shadow-md transition-all flex items-center gap-3 relative group ${state.currentRoleId === role.id ? 'active' : ''}`;
+                
+                // Content container to separate click area from delete button
+                const contentDiv = document.createElement('div');
+                contentDiv.className = 'flex items-center gap-3 flex-1 overflow-hidden';
+                contentDiv.onclick = () => selectRole(role.id);
+                contentDiv.innerHTML = `
+                    <div class="text-2xl">${role.icon || '👤'}</div>
+                    <div class="flex-1 overflow-hidden">
+                        <div class="font-bold text-sm truncate">${role.name}</div>
+                        <div class="text-xs text-gray-500 truncate">${role.desc}</div>
+                    </div>
+                `;
+                div.appendChild(contentDiv);
+
+                if (isCustom) {
+                    const delBtn = document.createElement('div'); // Changed from button to div to avoid potential default form submission or button behaviors
+                    delBtn.className = 'absolute right-2 top-2 text-gray-400 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-all cursor-pointer z-50 p-1 bg-white rounded-full shadow-sm';
+                    delBtn.innerHTML = '<i class="fas fa-times-circle text-xl"></i>';
+                    delBtn.title = '删除角色';
+                    
+                    // Use addEventListener for more robust event handling
+                    delBtn.addEventListener('click', function(e) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        console.log('Delete clicked for role:', role.id); // Debug log
+                        deleteRole(role.id);
+                    });
+                    
+                    div.appendChild(delBtn);
+                }
+                
+                elements.roleList.appendChild(div);
+            });
+        }
+
+        function deleteRole(roleId) {
+            if (!confirm('确定要删除这个角色吗？相关的对话记录也将被清除。')) return;
+            
+            // 1. Update state first
+            state.roles = state.roles.filter(r => r.id !== roleId);
+            delete state.chatHistory[roleId];
+            
+            // 2. Persist to localStorage
+            saveChatHistory();
+            const customRoles = state.roles.filter(r => String(r.id).startsWith('custom-'));
+            localStorage.setItem('custom_roles', JSON.stringify(customRoles));
+            
+            // 3. Update UI
+            if (state.currentRoleId === roleId) {
+                state.currentRoleId = null;
+                elements.activeRoleName.textContent = '请选择角色';
+                elements.activeRoleDesc.textContent = '开始您的对话';
+                elements.activeRoleHeader.querySelector('div').textContent = '?';
+                elements.clearChatBtn.classList.add('hidden');
+                renderMessages(); // Clear messages view
+            }
+            
+            // 4. Force re-render of role list immediately
+            setTimeout(() => {
+                renderRoles();
+                checkInputs();
+            }, 0);
+        }
+
+        function createRole() {
+            const name = elements.newRoleName.value.trim();
+            const desc = elements.newRoleDesc.value.trim();
+            const prompt = elements.newRolePrompt.value.trim();
+            if (!name || !prompt) return alert('请填写名称和提示词');
+
+            const newRole = {
+                id: 'custom-' + Date.now(),
+                name, desc, prompt, icon: '✨'
+            };
+            state.roles.push(newRole);
+            localStorage.setItem('custom_roles', JSON.stringify(state.roles.filter(r => r.id.startsWith('custom-'))));
+            renderRoles();
+            elements.roleModal.classList.add('hidden');
+            // Clear inputs
+            elements.newRoleName.value = '';
+            elements.newRoleDesc.value = '';
+            elements.newRolePrompt.value = '';
+        }
+
+        function selectRole(roleId) {
+            state.currentRoleId = roleId;
+            const role = state.roles.find(r => r.id === roleId);
+            elements.activeRoleName.textContent = role.name;
+            elements.activeRoleDesc.textContent = role.desc;
+            elements.activeRoleHeader.querySelector('div').textContent = role.icon || '👤';
+            elements.clearChatBtn.classList.remove('hidden');
+            
+            renderRoles();
+            renderMessages();
+            checkInputs();
+        }
+
+        function checkInputs() {
+            const isReady = state.apiKey && state.currentRoleId;
+            elements.userInput.disabled = !isReady;
+            elements.sendBtn.disabled = !isReady;
+            elements.voiceBtn.disabled = !state.currentRoleId;
+            
+            if (!state.apiKey) {
+                elements.userInput.placeholder = "请先设置 API Key...";
+            } else if (!state.currentRoleId) {
+                elements.userInput.placeholder = "请选择一个角色...";
+            } else {
+                elements.userInput.placeholder = "输入消息...";
+            }
+        }
+
+        function renderMessages() {
+            elements.chatMessages.innerHTML = '';
+            const messages = state.chatHistory[state.currentRoleId] || [];
+            if (messages.length === 0) {
+                elements.chatMessages.innerHTML = `
+                    <div class="text-center text-gray-400 mt-10">
+                        <p>与 <b>${state.roles.find(r => r.id === state.currentRoleId).name}</b> 的对话开始了</p>
+                    </div>
+                `;
+                return;
+            }
+
+            messages.forEach(msg => {
+                const isUser = msg.role === 'user';
+                const div = document.createElement('div');
+                div.className = `flex ${isUser ? 'justify-end' : 'justify-start'}`;
+                div.innerHTML = `
+                    <div class="max-w-[80%] rounded-2xl p-3 ${isUser ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-800 shadow-sm'} message-content">
+                        ${marked.parse(msg.content)}
+                    </div>
+                `;
+                elements.chatMessages.appendChild(div);
+            });
+            elements.chatMessages.scrollTop = elements.chatMessages.scrollHeight;
+        }
+
+        async function sendMessage() {
+            const content = elements.userInput.value.trim();
+            if (!content || !state.apiKey || !state.currentRoleId) return;
+
+            const role = state.roles.find(r => r.id === state.currentRoleId);
+            if (!state.chatHistory[state.currentRoleId]) {
+                state.chatHistory[state.currentRoleId] = [];
+            }
+
+            // Add user message
+            state.chatHistory[state.currentRoleId].push({ role: 'user', content });
+            elements.userInput.value = '';
+            renderMessages();
+
+            // Prepare API call with Context Isolation
+            const messages = [
+                { role: 'system', content: role.prompt },
+                ...state.chatHistory[state.currentRoleId].filter(m => m.content !== '...')
+            ];
+
+            // Add placeholder for AI response
+            const aiMsg = { role: 'assistant', content: '...' };
+            state.chatHistory[state.currentRoleId].push(aiMsg);
+            renderMessages();
+
+            try {
+                const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${state.apiKey}`,
+                        'Content-Type': 'application/json',
+                        'HTTP-Referer': window.location.href,
+                        'X-Title': 'Chat'
+                    },
+                    body: JSON.stringify({
+                        model: state.selectedModel,
+                        messages: messages
+                    })
+                });
+
+                const data = await response.json();
+                if (data.choices && data.choices[0]) {
+                    aiMsg.content = data.choices[0].message.content;
+                } else if (data.error) {
+                    aiMsg.content = `错误: ${data.error.message || '未知错误'}`;
+                } else {
+                    aiMsg.content = "抱歉，我无法响应。请检查您的设置。";
+                }
+                saveChatHistory();
+            } catch (error) {
+                aiMsg.content = "网络请求失败，请稍后重试。";
+                console.error(error);
+            }
+            renderMessages();
+        }
+
+        init();
+    </script>
+</body>
+</html>
