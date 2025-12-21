@@ -16,7 +16,7 @@ const crypto = require('crypto');
 
 const app = express();
 const upload = multer({ dest: 'uploads/' });
-const PORT = 3000;
+const PORT = 443;
 
 app.use(bodyParser.json());
 app.use(express.static(path.join(__dirname, 'public')));
