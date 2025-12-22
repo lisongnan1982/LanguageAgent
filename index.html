@@ -51,6 +51,9 @@
                         <h3 class="font-bold text-gray-800" id="activeRoleName">请选择角色</h3>
                         <p class="text-xs text-gray-500" id="activeRoleDesc">开始您的对话</p>
                     </div>
+                    <button id="playAllBtn" class="p-2 text-gray-400 hover:text-green-500 transition-colors hidden" title="连续播放所有已缓存音频">
+                        <i class="fas fa-play-circle text-xl"></i>
+                    </button>
                     <button id="clearChatBtn" class="p-2 text-gray-400 hover:text-red-500 transition-colors hidden" title="清空当前对话">
                         <i class="fas fa-trash-alt"></i>
                     </button>
@@ -234,7 +237,9 @@
             currentRoleId: null,
             chatHistory: JSON.parse(localStorage.getItem('chat_history')) || {}, // roleId -> messages[]
             ttsCache: {}, // (text + voiceType) -> base64 audio
-            currentAudio: null // Track currently playing audio
+            currentAudio: null, // Track currently playing audio
+            isPlayingAll: false, // Track if continuous playback is active
+            playAllQueue: [] // Queue for continuous playback
         };
 
         // DOM Elements
@@ -277,7 +282,8 @@
             activeRoleName: document.getElementById('activeRoleName'),
             activeRoleDesc: document.getElementById('activeRoleDesc'),
             activeRoleHeader: document.getElementById('activeRoleHeader'),
-            clearChatBtn: document.getElementById('clearChatBtn')
+            clearChatBtn: document.getElementById('clearChatBtn'),
+            playAllBtn: document.getElementById('playAllBtn')
         };
 
         // Initialize
@@ -371,6 +377,8 @@
                     renderMessages();
                 }
             };
+
+            setupPlayAllButton();
 
             // Voice Recognition Logic
             let mediaRecorder;
@@ -673,13 +681,19 @@ Respond ONLY with the JSON object. Do not include markdown code blocks.`;
                 state.currentAudio = null;
             }
 
+            // Stop continuous playback if active
+            if (state.isPlayingAll) {
+                state.isPlayingAll = false;
+            }
+
             state.currentRoleId = roleId;
             const role = state.roles.find(r => r.id === roleId);
             elements.activeRoleName.textContent = role.name;
             elements.activeRoleDesc.textContent = role.desc;
             elements.activeRoleHeader.querySelector('div').textContent = role.icon || '👤';
             elements.clearChatBtn.classList.remove('hidden');
-            
+            elements.playAllBtn.classList.remove('hidden');
+
             renderRoles();
             renderMessages();
             checkInputs();
@@ -717,17 +731,26 @@ Respond ONLY with the JSON object. Do not include markdown code blocks.`;
                 const isUser = msg.role === 'user';
                 const div = document.createElement('div');
                 div.className = `flex ${isUser ? 'justify-end' : 'justify-start'} items-end gap-2`;
-                
+
                 const contentHtml = marked.parse(msg.content);
-                
+
+                // Check if audio is cached for this message
+                const voiceType = state.volcTtsVoice || 'zh_female_vv_uranus_bigtts';
+                const cacheKey = msg.content + '_' + voiceType;
+                const isCached = !isUser && state.ttsCache[cacheKey];
+                const buttonClass = isCached
+                    ? 'text-green-500 hover:text-green-600'
+                    : 'text-gray-400 hover:text-blue-500';
+                const buttonTitle = isCached ? '播放语音 (已缓存)' : '播放语音';
+
                 div.innerHTML = `
                     <div class="max-w-[80%] rounded-2xl p-3 ${isUser ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-800 shadow-sm'} message-content relative group">
                         ${contentHtml}
                         ${!isUser ? `
-                            <button onclick="playTts('${msg.content.replace(/'/g, "\\'").replace(/\n/g, " ")}', this, ${index})" 
+                            <button onclick="playTts('${msg.content.replace(/'/g, "\\'").replace(/\n/g, " ")}', this, ${index})"
                                     data-msg-index="${index}"
-                                    class="absolute -right-10 bottom-0 p-2 text-gray-400 hover:text-blue-500 transition-all"
-                                    title="播放语音">
+                                    class="absolute -right-10 bottom-0 p-2 ${buttonClass} transition-all"
+                                    title="${buttonTitle}">
                                 <i class="fas fa-volume-up text-lg"></i>
                             </button>
                         ` : ''}
@@ -744,6 +767,11 @@ Respond ONLY with the JSON object. Do not include markdown code blocks.`;
                 return;
             }
 
+            // Stop continuous playback if active
+            if (state.isPlayingAll) {
+                stopPlayAll();
+            }
+
             // Helper to get the current button instance (in case DOM re-rendered)
             const getButton = () => {
                 const currentBtn = document.querySelector(`button[data-msg-index="${index}"]`);
@@ -753,25 +781,39 @@ Respond ONLY with the JSON object. Do not include markdown code blocks.`;
             const updateButtonState = (isLoading, isPlaying) => {
                 const targetBtn = getButton();
                 if (!targetBtn) return;
-                
+
                 const icon = targetBtn.querySelector('i');
                 if (!icon) return;
+
+                // Check if audio is cached
+                const voiceType = state.volcTtsVoice || 'zh_female_vv_uranus_bigtts';
+                const cacheKey = text + '_' + voiceType;
+                const isCached = state.ttsCache[cacheKey];
 
                 if (isLoading) {
                     icon.className = 'fas fa-spinner animate-spin';
                     targetBtn.disabled = true;
-                    targetBtn.classList.remove('text-gray-400', 'hover:text-blue-500');
+                    targetBtn.classList.remove('text-gray-400', 'text-green-500', 'hover:text-blue-500', 'hover:text-green-600');
                     targetBtn.classList.add('text-blue-600');
                 } else if (isPlaying) {
                     icon.className = 'fas fa-volume-up';
-                    targetBtn.disabled = false; // Allow clicking to stop/restart? For now let's disable to avoid overlap
-                    targetBtn.classList.remove('text-gray-400', 'hover:text-blue-500');
+                    targetBtn.disabled = false;
+                    targetBtn.classList.remove('text-gray-400', 'text-green-500', 'hover:text-blue-500', 'hover:text-green-600');
                     targetBtn.classList.add('text-blue-600', 'animate-pulse');
                 } else {
+                    // Restore to idle state - green if cached, gray if not
                     icon.className = 'fas fa-volume-up';
                     targetBtn.disabled = false;
-                    targetBtn.classList.add('text-gray-400', 'hover:text-blue-500');
                     targetBtn.classList.remove('text-blue-600', 'animate-pulse');
+                    if (isCached) {
+                        targetBtn.classList.remove('text-gray-400', 'hover:text-blue-500');
+                        targetBtn.classList.add('text-green-500', 'hover:text-green-600');
+                        targetBtn.title = '播放语音 (已缓存)';
+                    } else {
+                        targetBtn.classList.remove('text-green-500', 'hover:text-green-600');
+                        targetBtn.classList.add('text-gray-400', 'hover:text-blue-500');
+                        targetBtn.title = '播放语音';
+                    }
                 }
             };
 
@@ -845,6 +887,15 @@ Respond ONLY with the JSON object. Do not include markdown code blocks.`;
                 const data = await response.json();
                 if (data.success && data.audio) {
                     state.ttsCache[cacheKey] = data.audio;
+
+                    // Update button appearance to show it's cached (green color)
+                    const targetBtn = getButton();
+                    if (targetBtn) {
+                        targetBtn.classList.remove('text-gray-400');
+                        targetBtn.classList.add('text-green-500', 'hover:text-green-600');
+                        targetBtn.title = '播放语音 (已缓存)';
+                    }
+
                     playAudio(data.audio);
                 } else {
                     throw new Error(data.message || '转换失败');
@@ -854,6 +905,156 @@ Respond ONLY with the JSON object. Do not include markdown code blocks.`;
                 alert('语音合成失败: ' + err.message);
                 updateButtonState(false, false);
             }
+        }
+
+        async function playAllCachedAudio() {
+            if (!state.currentRoleId) return;
+
+            const messages = state.chatHistory[state.currentRoleId] || [];
+            const voiceType = state.volcTtsVoice || 'zh_female_vv_uranus_bigtts';
+
+            // Build queue of cached assistant messages
+            state.playAllQueue = [];
+            messages.forEach((msg, index) => {
+                if (msg.role === 'assistant') {
+                    const cacheKey = msg.content + '_' + voiceType;
+                    if (state.ttsCache[cacheKey]) {
+                        state.playAllQueue.push({
+                            text: msg.content,
+                            index: index,
+                            audioData: state.ttsCache[cacheKey]
+                        });
+                    }
+                }
+            });
+
+            if (state.playAllQueue.length === 0) {
+                alert('当前场景没有已缓存的音频。请先点击消息旁的播放按钮生成音频。');
+                return;
+            }
+
+            // Stop any currently playing audio
+            if (state.currentAudio) {
+                state.currentAudio.pause();
+                state.currentAudio = null;
+            }
+
+            // Update button state
+            const icon = elements.playAllBtn.querySelector('i');
+            icon.className = 'fas fa-stop-circle text-xl';
+            elements.playAllBtn.title = '停止连续播放';
+            elements.playAllBtn.classList.remove('text-gray-400', 'hover:text-green-500');
+            elements.playAllBtn.classList.add('text-red-500', 'hover:text-red-600');
+
+            state.isPlayingAll = true;
+            playNextInQueue();
+        }
+
+        function playNextInQueue() {
+            if (!state.isPlayingAll || state.playAllQueue.length === 0) {
+                // Playback finished or stopped
+                stopPlayAll();
+                return;
+            }
+
+            const item = state.playAllQueue.shift();
+            const audio = new Audio("data:audio/mp3;base64," + item.audioData);
+            state.currentAudio = audio;
+
+            // Highlight the current message being played
+            const btn = document.querySelector(`button[data-msg-index="${item.index}"]`);
+            if (btn) {
+                const icon = btn.querySelector('i');
+                if (icon) {
+                    icon.className = 'fas fa-volume-up';
+                    btn.classList.remove('text-gray-400', 'text-green-500', 'hover:text-blue-500', 'hover:text-green-600');
+                    btn.classList.add('text-blue-600', 'animate-pulse');
+                }
+            }
+
+            audio.onended = () => {
+                // Reset button state
+                if (btn) {
+                    const icon = btn.querySelector('i');
+                    if (icon) {
+                        icon.className = 'fas fa-volume-up';
+                        btn.classList.remove('text-blue-600', 'animate-pulse');
+                        btn.classList.add('text-green-500', 'hover:text-green-600');
+                    }
+                }
+                state.currentAudio = null;
+
+                // Play next after a short pause
+                setTimeout(() => {
+                    playNextInQueue();
+                }, 500);
+            };
+
+            audio.onerror = (e) => {
+                console.error('Audio Playback Error:', e);
+                state.currentAudio = null;
+                // Continue to next even if error
+                playNextInQueue();
+            };
+
+            audio.play().catch(e => {
+                console.error('Play Promise Error:', e);
+                playNextInQueue();
+            });
+        }
+
+        function stopPlayAll() {
+            state.isPlayingAll = false;
+            state.playAllQueue = [];
+
+            if (state.currentAudio) {
+                state.currentAudio.pause();
+                state.currentAudio = null;
+            }
+
+            // Reset all button states
+            document.querySelectorAll('button[data-msg-index]').forEach(btn => {
+                const voiceType = state.volcTtsVoice || 'zh_female_vv_uranus_bigtts';
+                const messages = state.chatHistory[state.currentRoleId] || [];
+                const index = parseInt(btn.getAttribute('data-msg-index'));
+                const msg = messages[index];
+
+                if (msg) {
+                    const cacheKey = msg.content + '_' + voiceType;
+                    const isCached = state.ttsCache[cacheKey];
+
+                    const icon = btn.querySelector('i');
+                    if (icon) {
+                        icon.className = 'fas fa-volume-up';
+                        btn.classList.remove('text-blue-600', 'animate-pulse');
+                        if (isCached) {
+                            btn.classList.remove('text-gray-400', 'hover:text-blue-500');
+                            btn.classList.add('text-green-500', 'hover:text-green-600');
+                        } else {
+                            btn.classList.remove('text-green-500', 'hover:text-green-600');
+                            btn.classList.add('text-gray-400', 'hover:text-blue-500');
+                        }
+                    }
+                }
+            });
+
+            // Reset play all button
+            const icon = elements.playAllBtn.querySelector('i');
+            icon.className = 'fas fa-play-circle text-xl';
+            elements.playAllBtn.title = '连续播放所有已缓存音频';
+            elements.playAllBtn.classList.remove('text-red-500', 'hover:text-red-600');
+            elements.playAllBtn.classList.add('text-gray-400', 'hover:text-green-500');
+        }
+
+        // Update playAllBtn click handler to toggle between play and stop
+        function setupPlayAllButton() {
+            elements.playAllBtn.onclick = () => {
+                if (state.isPlayingAll) {
+                    stopPlayAll();
+                } else {
+                    playAllCachedAudio();
+                }
+            };
         }
 
         async function autoReply() {
