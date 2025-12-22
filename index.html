@@ -233,7 +233,8 @@
             ],
             currentRoleId: null,
             chatHistory: JSON.parse(localStorage.getItem('chat_history')) || {}, // roleId -> messages[]
-            ttsCache: {} // (text + voiceType) -> base64 audio
+            ttsCache: {}, // (text + voiceType) -> base64 audio
+            currentAudio: null // Track currently playing audio
         };
 
         // DOM Elements
@@ -666,6 +667,12 @@ Respond ONLY with the JSON object. Do not include markdown code blocks.`;
         }
 
         function selectRole(roleId) {
+            // Stop any playing audio when switching roles
+            if (state.currentAudio) {
+                state.currentAudio.pause();
+                state.currentAudio = null;
+            }
+
             state.currentRoleId = roleId;
             const role = state.roles.find(r => r.id === roleId);
             elements.activeRoleName.textContent = role.name;
@@ -717,7 +724,8 @@ Respond ONLY with the JSON object. Do not include markdown code blocks.`;
                     <div class="max-w-[80%] rounded-2xl p-3 ${isUser ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-800 shadow-sm'} message-content relative group">
                         ${contentHtml}
                         ${!isUser ? `
-                            <button onclick="playTts('${msg.content.replace(/'/g, "\\'").replace(/\n/g, " ")}', this)" 
+                            <button onclick="playTts('${msg.content.replace(/'/g, "\\'").replace(/\n/g, " ")}', this, ${index})" 
+                                    data-msg-index="${index}"
                                     class="absolute -right-10 bottom-0 p-2 text-gray-400 hover:text-blue-500 transition-all"
                                     title="播放语音">
                                 <i class="fas fa-volume-up text-lg"></i>
@@ -730,34 +738,96 @@ Respond ONLY with the JSON object. Do not include markdown code blocks.`;
             elements.chatMessages.scrollTop = elements.chatMessages.scrollHeight;
         }
 
-        async function playTts(text, btn) {
+        async function playTts(text, btn, index) {
             if (!state.volcAppId || !state.volcTtsToken) {
                 alert('请先在设置中配置火山引擎 TTS 参数 (AppID 和 Access Token)');
                 return;
             }
 
+            // Helper to get the current button instance (in case DOM re-rendered)
+            const getButton = () => {
+                const currentBtn = document.querySelector(`button[data-msg-index="${index}"]`);
+                return currentBtn || btn; // Fallback to original if not found (though original might be detached)
+            };
+
+            const updateButtonState = (isLoading, isPlaying) => {
+                const targetBtn = getButton();
+                if (!targetBtn) return;
+                
+                const icon = targetBtn.querySelector('i');
+                if (!icon) return;
+
+                if (isLoading) {
+                    icon.className = 'fas fa-spinner animate-spin';
+                    targetBtn.disabled = true;
+                    targetBtn.classList.remove('text-gray-400', 'hover:text-blue-500');
+                    targetBtn.classList.add('text-blue-600');
+                } else if (isPlaying) {
+                    icon.className = 'fas fa-volume-up';
+                    targetBtn.disabled = false; // Allow clicking to stop/restart? For now let's disable to avoid overlap
+                    targetBtn.classList.remove('text-gray-400', 'hover:text-blue-500');
+                    targetBtn.classList.add('text-blue-600', 'animate-pulse');
+                } else {
+                    icon.className = 'fas fa-volume-up';
+                    targetBtn.disabled = false;
+                    targetBtn.classList.add('text-gray-400', 'hover:text-blue-500');
+                    targetBtn.classList.remove('text-blue-600', 'animate-pulse');
+                }
+            };
+
+            // Stop previous audio if playing
+            if (state.currentAudio) {
+                state.currentAudio.pause();
+                state.currentAudio.currentTime = 0;
+                state.currentAudio = null;
+                // We should ideally reset the UI of the previous button, but finding it might be complex if we didn't store it.
+                // A simple global reset or just letting the new click take over is acceptable for this scope.
+                // However, let's try to reset all buttons' state just in case.
+                document.querySelectorAll('button[data-msg-index] i').forEach(i => {
+                    i.className = 'fas fa-volume-up';
+                    i.closest('button').disabled = false;
+                    i.closest('button').classList.add('text-gray-400');
+                    i.closest('button').classList.remove('text-blue-600', 'animate-pulse');
+                });
+            }
+
             const voiceType = state.volcTtsVoice || 'zh_female_vv_uranus_bigtts';
             const cacheKey = text + '_' + voiceType;
 
-            const icon = btn.querySelector('i');
-            const originalClass = icon.className;
+            const playAudio = (base64Data) => {
+                const audio = new Audio("data:audio/mp3;base64," + base64Data);
+                state.currentAudio = audio;
+                
+                updateButtonState(false, true);
+
+                audio.onended = () => {
+                    updateButtonState(false, false);
+                    state.currentAudio = null;
+                };
+
+                audio.onerror = (e) => {
+                    console.error('Audio Playback Error:', e);
+                    alert('音频播放失败');
+                    updateButtonState(false, false);
+                    state.currentAudio = null;
+                };
+
+                audio.play().catch(e => {
+                    console.error('Play Promise Error:', e);
+                    // Interactions requirements might block auto-play if not triggered by user, 
+                    // but here it is triggered by click, so it should be fine.
+                });
+            };
 
             // Check cache first
             if (state.ttsCache[cacheKey]) {
-                console.log('Using cached audio for:', text.substring(0, 20) + '...');
-                const audio = new Audio("data:audio/mp3;base64," + state.ttsCache[cacheKey]);
-                icon.className = 'fas fa-volume-up text-blue-500';
-                btn.disabled = true;
-                audio.play();
-                audio.onended = () => {
-                    icon.className = originalClass;
-                    btn.disabled = false;
-                };
+                console.log('Using cached audio');
+                playAudio(state.ttsCache[cacheKey]);
                 return;
             }
 
-            icon.className = 'fas fa-spinner animate-spin';
-            btn.disabled = true;
+            // Fetch from API
+            updateButtonState(true, false);
 
             try {
                 const response = await fetch('/api/tts', {
@@ -774,24 +844,15 @@ Respond ONLY with the JSON object. Do not include markdown code blocks.`;
 
                 const data = await response.json();
                 if (data.success && data.audio) {
-                    // Save to cache
                     state.ttsCache[cacheKey] = data.audio;
-                    
-                    const audio = new Audio("data:audio/mp3;base64," + data.audio);
-                    audio.play();
-                    icon.className = 'fas fa-volume-up text-blue-500';
-                    audio.onended = () => {
-                        icon.className = originalClass;
-                        btn.disabled = false;
-                    };
+                    playAudio(data.audio);
                 } else {
                     throw new Error(data.message || '转换失败');
                 }
             } catch (err) {
                 console.error('TTS Error:', err);
                 alert('语音合成失败: ' + err.message);
-                icon.className = originalClass;
-                btn.disabled = false;
+                updateButtonState(false, false);
             }
         }
 
