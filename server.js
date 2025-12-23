@@ -514,7 +514,7 @@ app.post('/mcp/tools/call', async (req, res) => {
                     'Content-Type': 'application/json',
                     'Prefer': 'wait'
                 },
-                timeout: 60000
+                timeout: 120000
             }
         );
 

@@ -745,6 +745,11 @@ Respond ONLY with the JSON object. Do not include markdown code blocks.`;
             }
 
             messages.forEach((msg, index) => {
+                // 跳过工具调用和工具结果消息（这些是技术消息，不应该显示）
+                if (msg.role === 'tool' || msg.tool_calls) {
+                    return;
+                }
+
                 const isUser = msg.role === 'user';
                 const div = document.createElement('div');
                 div.className = `flex ${isUser ? 'justify-end' : 'justify-start'} items-end gap-2`;
@@ -1245,7 +1250,7 @@ Respond ONLY with the suggested text, no explanations.`
                     console.log('Parsed result:', resultData);
                     console.log('Image URL:', resultData.imageUrl);
 
-                    // 将工具调用添加到消息历史
+                    // 将工具调用添加到 API 消息历史（用于后续调用），但不添加到 chatHistory（用于显示）
                     messages.push(data.choices[0].message);
                     messages.push(toolResult);
 
@@ -1275,7 +1280,15 @@ Respond ONLY with the suggested text, no explanations.`
 
                         data = await response.json();
                         if (data.choices && data.choices[0]) {
-                            aiMsg.content = data.choices[0].message.content;
+                            // 移除 LLM 返回内容中的 markdown 图片（避免重复显示）
+                            let content = data.choices[0].message.content;
+                            // 移除 markdown 图片语法: ![alt](url)
+                            content = content.replace(/!\[([^\]]*)\]\([^)]+\)/g, '');
+                            // 移除可能的纯 URL 图片链接
+                            content = content.replace(/https?:\/\/[^\s]+\.(png|jpg|jpeg|gif|webp)[^\s]*/gi, '');
+                            // 清理多余的空行
+                            content = content.replace(/\n{3,}/g, '\n\n').trim();
+                            aiMsg.content = content;
                         }
                     } else if (resultData.error) {
                         aiMsg.content = `图片生成失败：${resultData.error}`;
