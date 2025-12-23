@@ -10,27 +10,97 @@
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
         body { font-family: 'Inter', 'PingFang SC', sans-serif; }
-        .chat-container { height: calc(100vh - 180px); }
+        /* 使用 dvh 支持移动端动态视口，回退到 vh */
+        .chat-container { height: calc(100dvh - 180px); height: calc(100vh - 180px); }
         .scrollbar-hide::-webkit-scrollbar { display: none; }
         .scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
         .message-content p { margin-bottom: 0.5rem; }
         .message-content p:last-child { margin-bottom: 0; }
         .role-card.active { border-color: #3b82f6; background-color: #eff6ff; }
+
+        /* 移动端侧边栏抽屉样式 */
+        .mobile-sidebar {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 85%;
+            max-width: 320px;
+            height: 100%;
+            height: 100dvh;
+            background: white;
+            z-index: 100;
+            transform: translateX(-100%);
+            transition: transform 0.3s ease-in-out;
+            box-shadow: 2px 0 10px rgba(0,0,0,0.1);
+        }
+        .mobile-sidebar.open { transform: translateX(0); }
+        .mobile-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.5);
+            z-index: 99;
+            opacity: 0;
+            visibility: hidden;
+            transition: opacity 0.3s, visibility 0.3s;
+        }
+        .mobile-overlay.open { opacity: 1; visibility: visible; }
+
+        /* 移动端角色卡片删除按钮始终可见 */
+        @media (max-width: 768px) {
+            .role-card .delete-btn { opacity: 1 !important; }
+            .chat-container { height: calc(100dvh - 160px); height: calc(100vh - 160px); }
+            /* 增大消息气泡的播放按钮触摸区域 */
+            .tts-btn {
+                width: 44px;
+                height: 44px;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+            }
+        }
+
+        /* 安全区域适配 (iPhone 刘海屏等) */
+        @supports (padding: env(safe-area-inset-bottom)) {
+            .input-area { padding-bottom: calc(1rem + env(safe-area-inset-bottom)); }
+        }
     </style>
 </head>
 <body class="bg-gray-50 text-gray-900">
-    <div class="max-w-6xl mx-auto h-screen flex flex-col p-4">
+    <!-- 移动端遮罩层 -->
+    <div id="mobileOverlay" class="mobile-overlay md:hidden"></div>
+
+    <!-- 移动端侧边栏抽屉 -->
+    <aside id="mobileSidebar" class="mobile-sidebar md:hidden p-4 flex flex-col">
+        <div class="flex justify-between items-center mb-4">
+            <h2 class="font-semibold text-gray-700 text-lg">角色选择</h2>
+            <button id="closeSidebarBtn" class="p-2 text-gray-500 hover:text-gray-700">
+                <i class="fas fa-times text-xl"></i>
+            </button>
+        </div>
+        <button id="addRoleBtnMobile" class="w-full mb-4 py-3 px-4 bg-blue-50 text-blue-600 rounded-xl flex items-center justify-center gap-2 active:bg-blue-100">
+            <i class="fas fa-plus"></i> 创建新角色
+        </button>
+        <div id="roleListMobile" class="flex-1 flex flex-col gap-3 overflow-y-auto scrollbar-hide">
+            <!-- Mobile Roles will be injected here -->
+        </div>
+    </aside>
+
+    <div class="max-w-6xl mx-auto h-screen h-[100dvh] flex flex-col p-2 md:p-4">
         <!-- Header -->
-        <header class="flex justify-between items-center mb-6 px-4">
-            <h1 class="text-2xl font-bold text-blue-600"><i class="fas fa-mask mr-2"></i>RolePlay Chat</h1>
+        <header class="flex justify-between items-center mb-4 md:mb-6 px-2 md:px-4">
+            <!-- 移动端菜单按钮 -->
+            <button id="menuBtn" class="md:hidden p-2 -ml-1 rounded-lg hover:bg-gray-200 transition-colors">
+                <i class="fas fa-bars text-xl text-gray-600"></i>
+            </button>
+            <h1 class="text-xl md:text-2xl font-bold text-blue-600"><i class="fas fa-mask mr-2"></i>RolePlay Chat</h1>
             <button id="settingsBtn" class="p-2 rounded-full hover:bg-gray-200 transition-colors">
                 <i class="fas fa-cog text-xl text-gray-600"></i>
             </button>
         </header>
 
-        <div class="flex flex-1 gap-6 overflow-hidden">
-            <!-- Sidebar: Roles -->
-            <aside class="w-1/4 flex flex-col gap-4 overflow-y-auto pr-2 scrollbar-hide">
+        <div class="flex flex-1 gap-4 md:gap-6 overflow-hidden">
+            <!-- Sidebar: Roles (桌面端) -->
+            <aside class="hidden md:flex w-1/4 flex-col gap-4 overflow-y-auto pr-2 scrollbar-hide">
                 <div class="flex justify-between items-center">
                     <h2 class="font-semibold text-gray-700">角色选择</h2>
                     <button id="addRoleBtn" class="text-sm text-blue-600 hover:text-blue-800"><i class="fas fa-plus mr-1"></i>创建</button>
@@ -43,24 +113,25 @@
             <!-- Main Chat Area -->
             <main class="flex-1 flex flex-col bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
                 <!-- Chat Header -->
-                <div id="activeRoleHeader" class="p-4 border-b border-gray-100 bg-gray-50 flex items-center gap-3">
-                    <div class="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center text-blue-600 font-bold">
+                <div id="activeRoleHeader" class="p-3 md:p-4 border-b border-gray-100 bg-gray-50 flex items-center gap-2 md:gap-3">
+                    <!-- 移动端点击头像可打开角色列表 -->
+                    <div id="roleAvatarBtn" class="w-10 h-10 md:w-10 md:h-10 rounded-full bg-blue-100 flex items-center justify-center text-blue-600 font-bold cursor-pointer md:cursor-default active:scale-95 transition-transform">
                         ?
                     </div>
-                    <div class="flex-1">
-                        <h3 class="font-bold text-gray-800" id="activeRoleName">请选择角色</h3>
-                        <p class="text-xs text-gray-500" id="activeRoleDesc">开始您的对话</p>
+                    <div class="flex-1 min-w-0">
+                        <h3 class="font-bold text-gray-800 truncate" id="activeRoleName">请选择角色</h3>
+                        <p class="text-xs text-gray-500 truncate" id="activeRoleDesc">开始您的对话</p>
                     </div>
-                    <button id="playAllBtn" class="p-2 text-gray-400 hover:text-green-500 transition-colors hidden" title="连续播放所有已缓存音频">
+                    <button id="playAllBtn" class="p-2 md:p-2 min-w-[44px] min-h-[44px] flex items-center justify-center text-gray-400 hover:text-green-500 active:text-green-600 transition-colors hidden" title="连续播放所有已缓存音频">
                         <i class="fas fa-play-circle text-xl"></i>
                     </button>
-                    <button id="clearChatBtn" class="p-2 text-gray-400 hover:text-red-500 transition-colors hidden" title="清空当前对话">
-                        <i class="fas fa-trash-alt"></i>
+                    <button id="clearChatBtn" class="p-2 md:p-2 min-w-[44px] min-h-[44px] flex items-center justify-center text-gray-400 hover:text-red-500 active:text-red-600 transition-colors hidden" title="清空当前对话">
+                        <i class="fas fa-trash-alt text-lg"></i>
                     </button>
                 </div>
 
                 <!-- Messages -->
-                <div id="chatMessages" class="flex-1 overflow-y-auto p-6 flex flex-col gap-4 chat-container">
+                <div id="chatMessages" class="flex-1 overflow-y-auto p-4 md:p-6 flex flex-col gap-3 md:gap-4 chat-container">
                     <div class="text-center text-gray-400 mt-10">
                         <i class="fas fa-comments text-4xl mb-4"></i>
                         <p>选择一个角色开始聊天吧</p>
@@ -68,23 +139,23 @@
                 </div>
 
                 <!-- Input Area -->
-                <div class="p-4 border-t border-gray-100">
+                <div class="input-area p-3 md:p-4 border-t border-gray-100">
                     <form id="chatForm" class="flex gap-2 items-center">
-                        <button type="button" id="voiceBtn" 
-                                class="w-10 h-10 hidden items-center justify-center rounded-full bg-gray-100 hover:bg-blue-100 text-gray-500 hover:text-blue-600 transition-all disabled:opacity-50"
+                        <button type="button" id="voiceBtn"
+                                class="w-11 h-11 md:w-10 md:h-10 hidden items-center justify-center rounded-full bg-gray-100 hover:bg-blue-100 active:bg-blue-200 text-gray-500 hover:text-blue-600 transition-all disabled:opacity-50 flex-shrink-0"
                                 disabled title="语音输入">
-                            <i class="fas fa-microphone"></i>
+                            <i class="fas fa-microphone text-lg"></i>
                         </button>
-                        <button type="button" id="autoReplyBtn" 
-                                class="w-10 h-10 flex items-center justify-center rounded-full bg-gray-100 hover:bg-purple-100 text-gray-500 hover:text-purple-600 transition-all disabled:opacity-50"
+                        <button type="button" id="autoReplyBtn"
+                                class="w-11 h-11 md:w-10 md:h-10 flex items-center justify-center rounded-full bg-gray-100 hover:bg-purple-100 active:bg-purple-200 text-gray-500 hover:text-purple-600 transition-all disabled:opacity-50 flex-shrink-0"
                                 disabled title="AI 自动回复/续写">
-                            <i class="fas fa-robot"></i>
+                            <i class="fas fa-robot text-lg"></i>
                         </button>
-                        <input type="text" id="userInput" placeholder="输入消息..." 
-                               class="flex-1 px-4 py-2 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100" 
+                        <input type="text" id="userInput" placeholder="输入消息..."
+                               class="flex-1 min-w-0 px-4 py-3 md:py-2 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100 text-base"
                                disabled>
-                        <button type="submit" id="sendBtn" 
-                                class="bg-blue-600 text-white px-6 py-2 rounded-xl hover:bg-blue-700 transition-colors disabled:bg-gray-400" 
+                        <button type="submit" id="sendBtn"
+                                class="bg-blue-600 text-white px-4 md:px-6 py-3 md:py-2 rounded-xl hover:bg-blue-700 active:bg-blue-800 transition-colors disabled:bg-gray-400 flex-shrink-0"
                                 disabled>
                             <i class="fas fa-paper-plane"></i>
                         </button>
@@ -100,40 +171,45 @@
     </div>
 
     <!-- Settings Modal -->
-    <div id="settingsModal" class="fixed inset-0 bg-black bg-opacity-50 hidden flex items-center justify-center z-50 p-4">
-        <div class="bg-white rounded-2xl p-6 w-full max-w-md shadow-xl max-h-[90vh] flex flex-col">
-            <h2 class="text-xl font-bold mb-4 flex-shrink-0">API 设置</h2>
-            <div class="space-y-4 overflow-y-auto flex-1 pr-2">
+    <div id="settingsModal" class="fixed inset-0 bg-black bg-opacity-50 hidden flex items-end md:items-center justify-center z-50 md:p-4">
+        <div class="bg-white rounded-t-2xl md:rounded-2xl p-4 md:p-6 w-full md:max-w-md shadow-xl max-h-[85vh] md:max-h-[90vh] flex flex-col">
+            <div class="flex items-center justify-between mb-4 flex-shrink-0">
+                <h2 class="text-xl font-bold">API 设置</h2>
+                <button id="closeSettings" class="md:hidden p-2 -mr-2 text-gray-500 hover:text-gray-700">
+                    <i class="fas fa-times text-xl"></i>
+                </button>
+            </div>
+            <div class="space-y-4 overflow-y-auto flex-1 pr-1 -mr-1">
                 <div>
                     <label class="block text-sm font-medium text-gray-700 mb-1">OpenRouter API Key</label>
-                    <div class="flex gap-2">
-                        <input type="password" id="apiKeyInput" placeholder="sk-or-v1-..." 
-                               class="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none">
-                        <button id="verifyKey" class="px-3 py-2 bg-gray-100 hover:bg-gray-200 rounded-lg text-sm transition-colors">验证并加载</button>
+                    <div class="flex flex-col sm:flex-row gap-2">
+                        <input type="password" id="apiKeyInput" placeholder="sk-or-v1-..."
+                               class="flex-1 px-4 py-3 md:py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-base">
+                        <button id="verifyKey" class="px-4 py-3 md:py-2 bg-gray-100 hover:bg-gray-200 active:bg-gray-300 rounded-lg text-sm transition-colors whitespace-nowrap">验证并加载</button>
                     </div>
                     <p class="text-xs text-gray-400 mt-1">Key 将保存在您的浏览器本地存储中</p>
                 </div>
                 <div>
                     <label class="block text-sm font-medium text-gray-700 mb-1">选择模型</label>
-                    <input type="text" id="modelSearch" placeholder="搜索模型 (如: gpt-4, claude)..." 
-                           class="w-full px-4 py-2 border border-gray-300 rounded-t-lg focus:ring-2 focus:ring-blue-500 outline-none border-b-0 text-sm">
-                    <select id="modelSelect" size="5" class="w-full px-2 py-1 border border-gray-300 rounded-b-lg focus:ring-2 focus:ring-blue-500 outline-none bg-white">
+                    <input type="text" id="modelSearch" placeholder="搜索模型 (如: gpt-4, claude)..."
+                           class="w-full px-4 py-3 md:py-2 border border-gray-300 rounded-t-lg focus:ring-2 focus:ring-blue-500 outline-none border-b-0 text-base md:text-sm">
+                    <select id="modelSelect" size="5" class="w-full px-2 py-1 border border-gray-300 rounded-b-lg focus:ring-2 focus:ring-blue-500 outline-none bg-white text-base">
                         <option value="openai/gpt-3.5-turbo">Loading models...</option>
                     </select>
-                    <button id="refreshModels" class="text-xs text-blue-600 mt-1 hover:underline">刷新模型列表</button>
+                    <button id="refreshModels" class="text-sm md:text-xs text-blue-600 mt-2 md:mt-1 hover:underline py-1">刷新模型列表</button>
                 </div>
                 <hr class="border-gray-100">
                 <div class="space-y-3 hidden">
                     <h3 class="text-sm font-bold text-gray-800">火山引擎语音识别设置 (ASR)</h3>
                     <div>
                         <label class="block text-sm font-medium text-gray-700 mb-1">Access Key (ASR)</label>
-                        <input type="password" id="volcToken" placeholder="火山引擎 Access Key" 
-                               class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none">
+                        <input type="password" id="volcToken" placeholder="火山引擎 Access Key"
+                               class="w-full px-4 py-3 md:py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-base">
                     </div>
                     <div>
                         <label class="block text-sm font-medium text-gray-700 mb-1">ASR Resource ID (资源标识)</label>
-                        <input type="text" id="volcCluster" placeholder="例如: volc.bigasr.auc" 
-                               class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none">
+                        <input type="text" id="volcCluster" placeholder="例如: volc.bigasr.auc"
+                               class="w-full px-4 py-3 md:py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-base">
                     </div>
                 </div>
                 <hr class="border-gray-100 hidden">
@@ -141,25 +217,25 @@
                     <h3 class="text-sm font-bold text-gray-800">火山引擎语音合成设置 (TTS)</h3>
                     <div>
                         <label class="block text-sm font-medium text-gray-700 mb-1">AppID</label>
-                        <input type="text" id="volcAppId" placeholder="火山引擎 AppID" 
-                               class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none">
+                        <input type="text" id="volcAppId" placeholder="火山引擎 AppID"
+                               class="w-full px-4 py-3 md:py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-base">
                     </div>
                     <div>
                         <label class="block text-sm font-medium text-gray-700 mb-1">Access Token (TTS)</label>
-                        <input type="password" id="volcTtsToken" placeholder="火山引擎 Access Token" 
-                               class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none">
+                        <input type="password" id="volcTtsToken" placeholder="火山引擎 Access Token"
+                               class="w-full px-4 py-3 md:py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-base">
                         <p class="text-[10px] text-gray-400 mt-1">注：TTS 通常使用 Access Token，与 ASR 的 Access Key 不同</p>
                     </div>
                     <div>
                         <label class="block text-sm font-medium text-gray-700 mb-1">TTS Resource ID (资源标识)</label>
-                        <input type="text" id="volcTtsCluster" placeholder="例如: volcano_tts 或 volc.tts.default" 
-                               class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none">
-                        <p class="text-[10px] text-gray-400 mt-1">提示：请确保在火山引擎控制台已开通对应服务并授权。普通音色通常用 volcano_tts，大模型音色可能用 volc.tts.default</p>
+                        <input type="text" id="volcTtsCluster" placeholder="例如: volcano_tts 或 volc.tts.default"
+                               class="w-full px-4 py-3 md:py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-base">
+                        <p class="text-[10px] text-gray-400 mt-1">提示：请确保在火山引擎控制台已开通对应服务并授权</p>
                     </div>
                     <div>
                         <label class="block text-sm font-medium text-gray-700 mb-1">默认音色 (Voice Type)</label>
                         <input type="text" id="volcTtsVoice" placeholder="例如: zh_female_vv_uranus_bigtts"
-                               class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none">
+                               class="w-full px-4 py-3 md:py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-base">
                     </div>
                 </div>
                 <hr class="border-gray-100">
@@ -168,44 +244,44 @@
                     <div>
                         <label class="block text-sm font-medium text-gray-700 mb-1">Replicate API Token</label>
                         <input type="password" id="replicateToken" placeholder="r8_..."
-                               class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none">
-                        <p class="text-[10px] text-gray-400 mt-1">用于文生图功能。在 <a href="https://replicate.com/account/api-tokens" target="_blank" class="text-blue-600 hover:underline">Replicate</a> 获取 API Token</p>
+                               class="w-full px-4 py-3 md:py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-base">
+                        <p class="text-[10px] text-gray-400 mt-1">用于文生图功能。在 <a href="https://replicate.com/account/api-tokens" target="_blank" class="text-blue-600 hover:underline">Replicate</a> 获取</p>
                     </div>
                     <div>
                         <label class="block text-sm font-medium text-gray-700 mb-1">图片生成模型</label>
-                        <select id="replicateModel" class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none bg-white">
+                        <select id="replicateModel" class="w-full px-4 py-3 md:py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none bg-white text-base">
                             <option value="realistic-vision-v5.1">Realistic Vision v5.1 (写实风格)</option>
                             <option value="realvisxl-v3.0-turbo">RealVisXL v3.0 Turbo (快速生成)</option>
                         </select>
-                        <p class="text-[10px] text-gray-400 mt-1">Realistic Vision: 写实照片风格 | RealVisXL: 更快速，风格多样</p>
                     </div>
                 </div>
-                <div class="flex justify-end gap-3 mt-6">
-                    <button id="closeSettings" class="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded-lg">关闭</button>
-                    <button id="saveSettings" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">保存</button>
-                </div>
+            </div>
+            <!-- 底部按钮固定在底部 -->
+            <div class="flex gap-3 mt-4 pt-4 border-t border-gray-100 flex-shrink-0">
+                <button id="closeSettingsDesktop" class="hidden md:block flex-1 px-4 py-2 text-gray-600 hover:bg-gray-100 rounded-lg">关闭</button>
+                <button id="saveSettings" class="flex-1 px-4 py-3 md:py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 active:bg-blue-800 font-medium">保存设置</button>
             </div>
         </div>
     </div>
 
     <!-- Create Role Modal -->
-    <div id="roleModal" class="fixed inset-0 bg-black bg-opacity-50 hidden flex items-center justify-center z-50 p-4">
-        <div class="bg-white rounded-2xl p-6 w-full max-w-md shadow-xl max-h-[90vh] flex flex-col">
+    <div id="roleModal" class="fixed inset-0 bg-black bg-opacity-50 hidden flex items-end md:items-center justify-center z-50 md:p-4">
+        <div class="bg-white rounded-t-2xl md:rounded-2xl p-4 md:p-6 w-full md:max-w-md shadow-xl max-h-[90vh] flex flex-col">
             <div class="flex justify-between items-center mb-4 flex-shrink-0">
                 <h2 class="text-xl font-bold">创建新角色</h2>
-                <button id="closeRoleModal" class="text-gray-400 hover:text-gray-600">
-                    <i class="fas fa-times"></i>
+                <button id="closeRoleModal" class="p-2 -mr-2 text-gray-400 hover:text-gray-600">
+                    <i class="fas fa-times text-xl"></i>
                 </button>
             </div>
 
-            <div class="overflow-y-auto flex-1 pr-2">
+            <div class="overflow-y-auto flex-1 pr-1 -mr-1">
             <!-- AI Generation Section -->
-            <div class="bg-blue-50 p-4 rounded-xl mb-6 border border-blue-100">
+            <div class="bg-blue-50 p-4 rounded-xl mb-4 md:mb-6 border border-blue-100">
                 <label class="block text-xs font-bold text-blue-600 uppercase tracking-wider mb-2">AI 灵感一键生成</label>
-                <div class="flex gap-2">
-                    <input type="text" id="aiPromptInput" placeholder="输入简单想法，如：毒舌的猫咪老师" 
-                           class="flex-1 px-4 py-2 border border-blue-200 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm">
-                    <button id="aiGenerateBtn" class="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-semibold hover:bg-blue-700 transition-all shadow-sm flex items-center gap-2 whitespace-nowrap">
+                <div class="flex flex-col sm:flex-row gap-2">
+                    <input type="text" id="aiPromptInput" placeholder="输入简单想法，如：毒舌的猫咪老师"
+                           class="flex-1 px-4 py-3 md:py-2 border border-blue-200 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-base md:text-sm">
+                    <button id="aiGenerateBtn" class="px-4 py-3 md:py-2 bg-blue-600 text-white rounded-lg text-sm font-semibold hover:bg-blue-700 active:bg-blue-800 transition-all shadow-sm flex items-center justify-center gap-2 whitespace-nowrap">
                         <i class="fas fa-magic"></i> 生成
                     </button>
                 </div>
@@ -215,25 +291,27 @@
             <div class="space-y-4">
                 <div>
                     <label class="block text-sm font-medium text-gray-700 mb-1">角色名称</label>
-                    <input type="text" id="newRoleName" placeholder="例如：福尔摩斯" 
-                           class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none">
+                    <input type="text" id="newRoleName" placeholder="例如：福尔摩斯"
+                           class="w-full px-4 py-3 md:py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-base">
                 </div>
                 <div>
                     <label class="block text-sm font-medium text-gray-700 mb-1">角色描述 (简短)</label>
-                    <input type="text" id="newRoleDesc" placeholder="例如：伟大的侦探" 
-                           class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none">
+                    <input type="text" id="newRoleDesc" placeholder="例如：伟大的侦探"
+                           class="w-full px-4 py-3 md:py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-base">
                 </div>
                 <div>
                     <label class="block text-sm font-medium text-gray-700 mb-1">提示词 (System Prompt)</label>
-                    <textarea id="newRolePrompt" rows="4" placeholder="描述角色的性格、说话方式和背景..." 
-                              class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"></textarea>
-                </div>
-                <div class="flex justify-end gap-3 mt-6">
-                    <button id="cancelRoleModal" class="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded-lg">取消</button>
-                    <button id="saveRole" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-semibold">保存角色</button>
+                    <textarea id="newRolePrompt" rows="4" placeholder="描述角色的性格、说话方式和背景..."
+                              class="w-full px-4 py-3 md:py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-base"></textarea>
                 </div>
             </div>
             </div><!-- 关闭滚动容器 -->
+
+            <!-- 底部按钮 -->
+            <div class="flex gap-3 mt-4 pt-4 border-t border-gray-100 flex-shrink-0">
+                <button id="cancelRoleModal" class="flex-1 px-4 py-3 md:py-2 text-gray-600 hover:bg-gray-100 active:bg-gray-200 rounded-lg">取消</button>
+                <button id="saveRole" class="flex-1 px-4 py-3 md:py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 active:bg-blue-800 font-semibold">保存角色</button>
+            </div>
         </div>
     </div>
 
@@ -269,13 +347,14 @@
             settingsBtn: document.getElementById('settingsBtn'),
             settingsModal: document.getElementById('settingsModal'),
             closeSettings: document.getElementById('closeSettings'),
+            closeSettingsDesktop: document.getElementById('closeSettingsDesktop'),
             saveSettings: document.getElementById('saveSettings'),
             apiKeyInput: document.getElementById('apiKeyInput'),
             verifyKey: document.getElementById('verifyKey'),
             modelSearch: document.getElementById('modelSearch'),
             modelSelect: document.getElementById('modelSelect'),
             refreshModels: document.getElementById('refreshModels'),
-            
+
             roleList: document.getElementById('roleList'),
             addRoleBtn: document.getElementById('addRoleBtn'),
             roleModal: document.getElementById('roleModal'),
@@ -307,7 +386,15 @@
             activeRoleDesc: document.getElementById('activeRoleDesc'),
             activeRoleHeader: document.getElementById('activeRoleHeader'),
             clearChatBtn: document.getElementById('clearChatBtn'),
-            playAllBtn: document.getElementById('playAllBtn')
+            playAllBtn: document.getElementById('playAllBtn'),
+            // 移动端元素
+            menuBtn: document.getElementById('menuBtn'),
+            mobileSidebar: document.getElementById('mobileSidebar'),
+            mobileOverlay: document.getElementById('mobileOverlay'),
+            closeSidebarBtn: document.getElementById('closeSidebarBtn'),
+            roleListMobile: document.getElementById('roleListMobile'),
+            addRoleBtnMobile: document.getElementById('addRoleBtnMobile'),
+            roleAvatarBtn: document.getElementById('roleAvatarBtn')
         };
 
         // Initialize
@@ -343,12 +430,41 @@
             setupEventListeners();
         }
 
+        // 移动端侧边栏控制
+        function openMobileSidebar() {
+            elements.mobileSidebar.classList.add('open');
+            elements.mobileOverlay.classList.add('open');
+            document.body.style.overflow = 'hidden';
+        }
+
+        function closeMobileSidebar() {
+            elements.mobileSidebar.classList.remove('open');
+            elements.mobileOverlay.classList.remove('open');
+            document.body.style.overflow = '';
+        }
+
         function setupEventListeners() {
+            // 移动端侧边栏事件
+            elements.menuBtn.onclick = openMobileSidebar;
+            elements.closeSidebarBtn.onclick = closeMobileSidebar;
+            elements.mobileOverlay.onclick = closeMobileSidebar;
+            elements.addRoleBtnMobile.onclick = () => {
+                closeMobileSidebar();
+                elements.roleModal.classList.remove('hidden');
+            };
+            // 移动端点击头像打开侧边栏
+            elements.roleAvatarBtn.onclick = () => {
+                if (window.innerWidth < 768) {
+                    openMobileSidebar();
+                }
+            };
+
             elements.settingsBtn.onclick = () => {
                 elements.apiKeyInput.value = state.apiKey;
                 elements.settingsModal.classList.remove('hidden');
             };
             elements.closeSettings.onclick = () => elements.settingsModal.classList.add('hidden');
+            elements.closeSettingsDesktop.onclick = () => elements.settingsModal.classList.add('hidden');
             elements.saveSettings.onclick = () => {
                 state.apiKey = elements.apiKeyInput.value;
                 state.selectedModel = elements.modelSelect.value;
@@ -382,8 +498,8 @@
 
             elements.modelSearch.oninput = () => {
                 const term = elements.modelSearch.value.toLowerCase();
-                renderModelOptions(state.allModels.filter(m => 
-                    m.id.toLowerCase().includes(term) || 
+                renderModelOptions(state.allModels.filter(m =>
+                    m.id.toLowerCase().includes(term) ||
                     (m.name && m.name.toLowerCase().includes(term))
                 ));
             };
@@ -533,43 +649,60 @@
         }
 
         function renderRoles() {
-            elements.roleList.innerHTML = '';
-            state.roles.forEach(role => {
+            // 创建角色卡片的通用函数
+            function createRoleCard(role, isMobile = false) {
                 const isCustom = String(role.id).startsWith('custom-');
                 const div = document.createElement('div');
-                div.className = `role-card p-3 border border-gray-200 rounded-xl cursor-pointer hover:shadow-md transition-all flex items-center gap-3 relative group ${state.currentRoleId === role.id ? 'active' : ''}`;
-                
+                // 移动端使用更大的触摸区域
+                const padding = isMobile ? 'p-4' : 'p-3';
+                div.className = `role-card ${padding} border border-gray-200 rounded-xl cursor-pointer hover:shadow-md active:scale-[0.98] transition-all flex items-center gap-3 relative group ${state.currentRoleId === role.id ? 'active' : ''}`;
+
                 // Content container to separate click area from delete button
                 const contentDiv = document.createElement('div');
                 contentDiv.className = 'flex items-center gap-3 flex-1 overflow-hidden';
-                contentDiv.onclick = () => selectRole(role.id);
+                contentDiv.onclick = () => {
+                    selectRole(role.id);
+                    if (isMobile) closeMobileSidebar();
+                };
                 contentDiv.innerHTML = `
                     <div class="text-2xl">${role.icon || '👤'}</div>
                     <div class="flex-1 overflow-hidden">
-                        <div class="font-bold text-sm truncate">${role.name}</div>
+                        <div class="font-bold ${isMobile ? 'text-base' : 'text-sm'} truncate">${role.name}</div>
                         <div class="text-xs text-gray-500 truncate">${role.desc}</div>
                     </div>
                 `;
                 div.appendChild(contentDiv);
 
                 if (isCustom) {
-                    const delBtn = document.createElement('div'); // Changed from button to div to avoid potential default form submission or button behaviors
-                    delBtn.className = 'absolute right-2 top-2 text-gray-400 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-all cursor-pointer z-50 p-1 bg-white rounded-full shadow-sm';
-                    delBtn.innerHTML = '<i class="fas fa-times-circle text-xl"></i>';
+                    const delBtn = document.createElement('div');
+                    // 移动端删除按钮始终可见且更大
+                    const mobileClass = isMobile ? 'opacity-100 w-10 h-10 flex items-center justify-center' : 'opacity-0 group-hover:opacity-100';
+                    delBtn.className = `delete-btn absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-red-500 active:text-red-600 ${mobileClass} transition-all cursor-pointer z-50 p-1 bg-white rounded-full shadow-sm`;
+                    delBtn.innerHTML = `<i class="fas fa-times-circle ${isMobile ? 'text-2xl' : 'text-xl'}"></i>`;
                     delBtn.title = '删除角色';
-                    
-                    // Use addEventListener for more robust event handling
+
                     delBtn.addEventListener('click', function(e) {
                         e.preventDefault();
                         e.stopPropagation();
-                        console.log('Delete clicked for role:', role.id); // Debug log
                         deleteRole(role.id);
                     });
-                    
+
                     div.appendChild(delBtn);
                 }
-                
-                elements.roleList.appendChild(div);
+
+                return div;
+            }
+
+            // 渲染桌面端角色列表
+            elements.roleList.innerHTML = '';
+            state.roles.forEach(role => {
+                elements.roleList.appendChild(createRoleCard(role, false));
+            });
+
+            // 渲染移动端角色列表
+            elements.roleListMobile.innerHTML = '';
+            state.roles.forEach(role => {
+                elements.roleListMobile.appendChild(createRoleCard(role, true));
             });
         }
 
@@ -720,7 +853,8 @@ Respond ONLY with the JSON object. Do not include markdown code blocks.`;
             const role = state.roles.find(r => r.id === roleId);
             elements.activeRoleName.textContent = role.name;
             elements.activeRoleDesc.textContent = role.desc;
-            elements.activeRoleHeader.querySelector('div').textContent = role.icon || '👤';
+            // 更新头像按钮
+            elements.roleAvatarBtn.textContent = role.icon || '👤';
             elements.clearChatBtn.classList.remove('hidden');
             elements.playAllBtn.classList.remove('hidden');
 
@@ -797,15 +931,15 @@ Respond ONLY with the JSON object. Do not include markdown code blocks.`;
                 ` : '';
 
                 div.innerHTML = `
-                    <div class="max-w-[80%] rounded-2xl p-3 ${isUser ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-800 shadow-sm'} message-content relative group">
+                    <div class="max-w-[85%] md:max-w-[80%] rounded-2xl p-3 ${isUser ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-800 shadow-sm'} message-content relative group">
                         ${contentHtml}
                         ${imageHtml}
                         ${!isUser ? `
                             <button onclick="playTts('${msg.content.replace(/'/g, "\\'").replace(/\n/g, " ")}', this, ${index})"
                                     data-msg-index="${index}"
-                                    class="absolute -right-10 bottom-0 p-2 ${buttonClass} transition-all"
+                                    class="tts-btn absolute -right-11 md:-right-10 bottom-0 p-2 min-w-[44px] min-h-[44px] flex items-center justify-center ${buttonClass} active:scale-110 transition-all"
                                     title="${buttonTitle}">
-                                <i class="fas fa-volume-up text-lg"></i>
+                                <i class="fas fa-volume-up text-lg md:text-base"></i>
                             </button>
                         ` : ''}
                     </div>
