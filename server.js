@@ -706,5 +706,5 @@ app.post('/api/text-to-image', async (req, res) => {
 });
 
 app.listen(PORT, () => {
-    console.log(`服务器运行在 http://localhost:${PORT}`);
+    console.log(`服务器运行在 http://0.0.0.0:${PORT}`);
 });
