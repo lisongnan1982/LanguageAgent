@@ -65,19 +65,20 @@ const IMAGE_MODELS = {
         scheduler: 'EulerA'
     },
     'realvisxl-v3.0-turbo': {
-        version: 'adirik/realvisxl-v3.0-turbo:6e941e7fe46955afc031f35e84312a792d546b0f434f9008d457eb9deb24575c',
-        defaultWidth: 512,
-        defaultHeight: 512,
+        version: 'adirik/realvisxl-v3.0-turbo:3dc73c805b11b4b01a60555e532fd3ab3f0e60d26f6584d9b8ba7e1b95858243',
+        defaultWidth: 768,
+        defaultHeight: 768,
         steps: 25,
-        guidance: 6
+        guidance: 2,
+        scheduler: 'DPM++_SDE_Karras'
     },
     'dreamshaper-xl-turbo': {
         version: 'lucataco/dreamshaper-xl-turbo:0a1710e0187b01a255302738ca0158ff02a22f4638679533e111082f9dd1b615',
-        defaultWidth: 512,
-        defaultHeight: 512,
-        steps: 25,
-        guidance: 7.5,
-        scheduler: null  // 使用模型默认
+        defaultWidth: 1024,
+        defaultHeight: 1024,
+        steps: 7,           // Turbo 模型只需要 7 步
+        guidance: 2,        // 低 guidance 效果更好
+        scheduler: 'K_EULER'  // 必须指定调度器
     }
 };
 
@@ -705,5 +706,5 @@ app.post('/api/text-to-image', async (req, res) => {
 });
 
 app.listen(PORT, () => {
-    console.log(`服务器运行在 http://localhost:${PORT}`);
+    console.log(`服务器运行在 http://0.0.0.0:${PORT}`);
 });
