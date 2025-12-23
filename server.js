@@ -69,6 +69,13 @@ const IMAGE_MODELS = {
         defaultWidth: 512,
         defaultHeight: 512,
         steps: 25,
+        guidance: 6
+    },
+    'dreamshaper-xl-turbo': {
+        version: 'lucataco/dreamshaper-xl-turbo:0a1710e0187b01a255302738ca0158ff02a22f4638679533e111082f9dd1b615',
+        defaultWidth: 512,
+        defaultHeight: 512,
+        steps: 25,
         guidance: 7.5,
         scheduler: null  // 使用模型默认
     }
