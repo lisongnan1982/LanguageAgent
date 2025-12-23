@@ -18,28 +18,174 @@ app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'index.html'));
 });
 
+// 定义文生图工具（供 LLM 调用）
+const TEXT_TO_IMAGE_TOOL = {
+    type: 'function',
+    function: {
+        name: 'generate_image',
+        description: '根据文本描述生成图片。当用户要求生成、创建、画图片时使用此工具。**重要：prompt 必须使用英文描述，如果用户提供中文描述，你需要先将其翻译成详细的英文提示词。**',
+        parameters: {
+            type: 'object',
+            properties: {
+                prompt: {
+                    type: 'string',
+                    description: '图片描述文本（必须使用英文）。详细描述想要生成的图片内容，包括主体、风格、质量等。例如："A cute cat sitting on clouds, digital art style, high quality, 8k uhd"。如果用户提供中文描述，请先翻译成英文。'
+                },
+                negative_prompt: {
+                    type: 'string',
+                    description: '负面提示词（英文），描述不想在图片中出现的内容',
+                    default: '(deformed iris, deformed pupils, semi-realistic, cgi, 3d, render, sketch, cartoon, drawing, anime:1.4), text, close up, cropped, out of frame, worst quality, low quality, jpeg artifacts, ugly, duplicate, morbid, mutilated, extra fingers, mutated hands, poorly drawn hands, poorly drawn face, mutation, deformed, blurry, dehydrated, bad anatomy, bad proportions, extra limbs, cloned face, disfigured, gross proportions, malformed limbs, missing arms, missing legs, extra arms, extra legs, fused fingers, too many fingers, long neck'
+                },
+                width: {
+                    type: 'number',
+                    description: '图片宽度（像素），默认 512',
+                    default: 512,
+                    enum: [512, 768, 1024]
+                },
+                height: {
+                    type: 'number',
+                    description: '图片高度（像素），默认 728',
+                    default: 728,
+                    enum: [512, 728, 768, 1024]
+                }
+            },
+            required: ['prompt']
+        }
+    }
+};
+
 // LLM 代理接口 - 解决前端直接调用 OpenRouter 的 CORS 和身份验证问题
+// 支持 function calling（工具调用）
 app.post('/api/proxy-llm', async (req, res) => {
-    const { apiKey, model, messages, response_format } = req.body;
+    const { apiKey, model, messages, response_format, tools, tool_choice, replicateToken } = req.body;
     if (!apiKey || !model || !messages) {
         return res.status(400).json({ success: false, message: '缺少必要参数' });
     }
 
     try {
-        const response = await axios.post('https://openrouter.ai/api/v1/chat/completions', {
+        // 构建请求参数
+        const requestBody = {
             model,
             messages,
             response_format
-        }, {
+        };
+
+        // 如果提供了工具，添加到请求中
+        if (tools && tools.length > 0) {
+            requestBody.tools = tools;
+            if (tool_choice) {
+                requestBody.tool_choice = tool_choice;
+            }
+        }
+
+        const response = await axios.post('https://openrouter.ai/api/v1/chat/completions', requestBody, {
             headers: {
                 'Authorization': `Bearer ${apiKey}`,
                 'Content-Type': 'application/json',
-                'HTTP-Referer': 'https://github.com/Roo-Code/Roo-Code', // 随便填一个，OpenRouter 喜欢有 referer
+                'HTTP-Referer': 'https://github.com/Roo-Code/Roo-Code',
                 'X-Title': 'RolePlay Chat'
             }
         });
 
-        res.json(response.data);
+        const data = response.data;
+
+        // 检查是否有工具调用
+        if (data.choices && data.choices[0].message.tool_calls) {
+            const toolCalls = data.choices[0].message.tool_calls;
+            const toolResults = [];
+
+            // 处理每个工具调用
+            for (const toolCall of toolCalls) {
+                if (toolCall.function.name === 'generate_image') {
+                    try {
+                        const args = JSON.parse(toolCall.function.arguments);
+
+                        if (!replicateToken) {
+                            toolResults.push({
+                                tool_call_id: toolCall.id,
+                                role: 'tool',
+                                name: 'generate_image',
+                                content: JSON.stringify({
+                                    error: '未配置 Replicate API Token，请在设置中配置'
+                                })
+                            });
+                            continue;
+                        }
+
+                        // 调用 Replicate API 生成图片
+                        const imageResponse = await axios.post(
+                            'https://api.replicate.com/v1/predictions',
+                            {
+                                version: 'lucataco/realistic-vision-v5.1:2c8e954decbf70b7607a4414e5785ef9e4de4b8c51d50fb8b8b349160e0ef6bb',
+                                input: {
+                                    seed: Math.floor(Math.random() * 10000),
+                                    steps: 20,
+                                    width: args.width || 512,
+                                    height: args.height || 728,
+                                    prompt: args.prompt,
+                                    guidance: 5,
+                                    scheduler: 'EulerA',
+                                    negative_prompt: args.negative_prompt || '(deformed iris, deformed pupils, semi-realistic, cgi, 3d, render, sketch, cartoon, drawing, anime:1.4), text, close up, cropped, out of frame, worst quality, low quality, jpeg artifacts, ugly, duplicate, morbid, mutilated, extra fingers, mutated hands, poorly drawn hands, poorly drawn face, mutation, deformed, blurry, dehydrated, bad anatomy, bad proportions, extra limbs, cloned face, disfigured, gross proportions, malformed limbs, missing arms, missing legs, extra arms, extra legs, fused fingers, too many fingers, long neck'
+                                }
+                            },
+                            {
+                                headers: {
+                                    'Authorization': `Bearer ${replicateToken}`,
+                                    'Content-Type': 'application/json',
+                                    'Prefer': 'wait'
+                                },
+                                timeout: 60000
+                            }
+                        );
+
+                        // 调试日志：查看 Replicate API 的响应
+                        console.log('Replicate API response:', JSON.stringify(imageResponse.data, null, 2));
+
+                        // 处理不同的输出格式
+                        let imageUrl = null;
+                        const output = imageResponse.data.output;
+                        if (Array.isArray(output) && output.length > 0) {
+                            imageUrl = output[0];
+                        } else if (typeof output === 'string') {
+                            imageUrl = output;
+                        }
+
+                        console.log('Extracted imageUrl:', imageUrl);
+
+                        if (!imageUrl) {
+                            throw new Error('No image URL in response');
+                        }
+
+                        toolResults.push({
+                            tool_call_id: toolCall.id,
+                            role: 'tool',
+                            name: 'generate_image',
+                            content: JSON.stringify({
+                                success: true,
+                                imageUrl: imageUrl,
+                                prompt: args.prompt
+                            })
+                        });
+
+                    } catch (error) {
+                        console.error('Image generation error:', error.response?.data || error.message);
+                        toolResults.push({
+                            tool_call_id: toolCall.id,
+                            role: 'tool',
+                            name: 'generate_image',
+                            content: JSON.stringify({
+                                error: `图片生成失败: ${error.response?.data?.detail || error.message}`
+                            })
+                        });
+                    }
+                }
+            }
+
+            // 返回工具调用结果，让前端继续对话
+            data.tool_results = toolResults;
+        }
+
+        res.json(data);
     } catch (error) {
         console.error('LLM Proxy Error:', error.response?.data || error.message);
         res.status(error.response?.status || 500).json(error.response?.data || { message: error.message });
@@ -240,6 +386,257 @@ app.post('/api/asr', upload.single('audio'), async (req, res) => {
     }
 });
 
+// ============================================
+// MCP 协议端点 (集成在主服务器中)
+// ============================================
+
+// MCP 服务器信息
+const MCP_SERVER_INFO = {
+    name: 'text-to-image-server',
+    version: '1.0.0',
+    protocolVersion: '2024-11-05',
+    capabilities: {
+        tools: {}
+    }
+};
+
+// MCP 工具定义
+const MCP_TOOLS = [
+    {
+        name: 'generate_image',
+        description: '根据文本描述生成图片。使用 Replicate 的 Realistic Vision v5.1 模型生成高质量写实风格图像。**重要：prompt 必须使用英文描述。**',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                prompt: {
+                    type: 'string',
+                    description: '图片描述文本（必须使用英文）。详细描述想要生成的图片内容，包括主体、风格、质量等。'
+                },
+                negative_prompt: {
+                    type: 'string',
+                    description: '负面提示词（英文），描述不想在图片中出现的内容',
+                    default: '(deformed iris, deformed pupils, semi-realistic, cgi, 3d, render, sketch, cartoon, drawing, anime:1.4), text, close up, cropped, out of frame, worst quality, low quality, jpeg artifacts, ugly, duplicate, morbid, mutilated, extra fingers, mutated hands, poorly drawn hands, poorly drawn face, mutation, deformed, blurry, dehydrated, bad anatomy, bad proportions, extra limbs, cloned face, disfigured, gross proportions, malformed limbs, missing arms, missing legs, extra arms, extra legs, fused fingers, too many fingers, long neck'
+                },
+                width: {
+                    type: 'number',
+                    description: '图片宽度（像素）',
+                    default: 512
+                },
+                height: {
+                    type: 'number',
+                    description: '图片高度（像素）',
+                    default: 728
+                },
+                steps: {
+                    type: 'number',
+                    description: '推理步数，越高质量越好但速度越慢',
+                    default: 20
+                },
+                guidance: {
+                    type: 'number',
+                    description: '引导强度，控制生成图片与提示词的匹配程度',
+                    default: 5
+                }
+            },
+            required: ['prompt']
+        }
+    }
+];
+
+// MCP 协议端点：初始化
+app.post('/mcp/initialize', (req, res) => {
+    console.log('MCP Initialize request:', req.body);
+    res.json({
+        protocolVersion: MCP_SERVER_INFO.protocolVersion,
+        capabilities: MCP_SERVER_INFO.capabilities,
+        serverInfo: {
+            name: MCP_SERVER_INFO.name,
+            version: MCP_SERVER_INFO.version
+        }
+    });
+});
+
+// MCP 协议端点：列出工具
+app.post('/mcp/tools/list', (req, res) => {
+    console.log('MCP Tools list request');
+    res.json({
+        tools: MCP_TOOLS
+    });
+});
+
+// MCP 协议端点：调用工具
+app.post('/mcp/tools/call', async (req, res) => {
+    const { name, arguments: args } = req.body.params || req.body;
+
+    console.log('MCP Tool call:', name, args);
+
+    if (name !== 'generate_image') {
+        return res.status(400).json({
+            error: {
+                code: -32601,
+                message: `Unknown tool: ${name}`
+            }
+        });
+    }
+
+    try {
+        // 从请求头或参数中获取 API Token
+        const apiToken = req.headers['x-replicate-token'] || args.api_token;
+
+        if (!apiToken) {
+            return res.status(400).json({
+                error: {
+                    code: -32602,
+                    message: 'Missing Replicate API token. Please configure it in settings.'
+                }
+            });
+        }
+
+        // 调用 Replicate API
+        const response = await axios.post(
+            'https://api.replicate.com/v1/predictions',
+            {
+                version: 'lucataco/realistic-vision-v5.1:2c8e954decbf70b7607a4414e5785ef9e4de4b8c51d50fb8b8b349160e0ef6bb',
+                input: {
+                    seed: Math.floor(Math.random() * 10000),
+                    steps: args.steps || 20,
+                    width: args.width || 512,
+                    height: args.height || 728,
+                    prompt: args.prompt,
+                    guidance: args.guidance || 5,
+                    scheduler: 'EulerA',
+                    negative_prompt: args.negative_prompt || '(deformed iris, deformed pupils, semi-realistic, cgi, 3d, render, sketch, cartoon, drawing, anime:1.4), text, close up, cropped, out of frame, worst quality, low quality, jpeg artifacts, ugly, duplicate, morbid, mutilated, extra fingers, mutated hands, poorly drawn hands, poorly drawn face, mutation, deformed, blurry, dehydrated, bad anatomy, bad proportions, extra limbs, cloned face, disfigured, gross proportions, malformed limbs, missing arms, missing legs, extra arms, extra legs, fused fingers, too many fingers, long neck'
+                }
+            },
+            {
+                headers: {
+                    'Authorization': `Bearer ${apiToken}`,
+                    'Content-Type': 'application/json',
+                    'Prefer': 'wait'
+                },
+                timeout: 60000
+            }
+        );
+
+        const result = response.data;
+        console.log('MCP Replicate API response:', JSON.stringify(result, null, 2));
+
+        // 处理不同的输出格式
+        let imageUrl = null;
+        if (Array.isArray(result.output) && result.output.length > 0) {
+            imageUrl = result.output[0];
+        } else if (typeof result.output === 'string') {
+            imageUrl = result.output;
+        }
+
+        console.log('MCP Extracted imageUrl:', imageUrl);
+
+        if (!imageUrl) {
+            throw new Error('No image URL in response');
+        }
+
+        res.json({
+            content: [
+                {
+                    type: 'text',
+                    text: `图片生成成功！\n\n提示词: ${args.prompt}\n图片URL: ${imageUrl}`
+                },
+                {
+                    type: 'image',
+                    data: imageUrl,
+                    mimeType: 'image/png'
+                }
+            ]
+        });
+
+    } catch (error) {
+        console.error('Error generating image:', error.response?.data || error.message);
+        res.status(500).json({
+            error: {
+                code: -32603,
+                message: `Failed to generate image: ${error.response?.data?.detail || error.message}`
+            }
+        });
+    }
+});
+
+// ============================================
+// 文生图 REST API 端点
+// ============================================
+
+// 文生图接口 (Text-to-Image) - 使用 Replicate API
+app.post('/api/text-to-image', async (req, res) => {
+    const { apiToken, prompt, negative_prompt, width, height, num_inference_steps, guidance_scale } = req.body;
+
+    if (!apiToken || !prompt) {
+        return res.status(400).json({ success: false, message: '缺少必要参数：apiToken 和 prompt' });
+    }
+
+    try {
+        console.log('Submitting text-to-image request to Replicate...');
+        console.log('Prompt:', prompt);
+
+        const response = await axios.post(
+            'https://api.replicate.com/v1/predictions',
+            {
+                version: 'adirik/realvisxl-v3.0-turbo:6e941e7fe46955afc031f35e84312a792d546b0f434f9008d457eb9deb24575c',
+                input: {
+                    width: width || 768,
+                    height: height || 768,
+                    prompt: prompt,
+                    refine: 'no_refiner',
+                    scheduler: 'DPM++_SDE_Karras',
+                    num_outputs: 1,
+                    guidance_scale: guidance_scale || 2,
+                    apply_watermark: false,
+                    high_noise_frac: 0.8,
+                    negative_prompt: negative_prompt || '(worst quality, low quality, illustration, 3d, 2d, painting, cartoons, sketch), open mouth',
+                    prompt_strength: 0.8,
+                    num_inference_steps: num_inference_steps || 25
+                }
+            },
+            {
+                headers: {
+                    'Authorization': `Bearer ${apiToken}`,
+                    'Content-Type': 'application/json',
+                    'Prefer': 'wait'
+                },
+                timeout: 60000 // 60秒超时
+            }
+        );
+
+        const result = response.data;
+        console.log('Replicate response status:', result.status);
+
+        if (result.status === 'succeeded' && result.output && result.output[0]) {
+            res.json({
+                success: true,
+                imageUrl: result.output[0],
+                prompt: prompt
+            });
+        } else if (result.status === 'processing') {
+            // 如果还在处理中，返回预测ID供轮询
+            res.json({
+                success: false,
+                processing: true,
+                predictionId: result.id,
+                message: '图片生成中，请稍后查询结果'
+            });
+        } else {
+            throw new Error(`Image generation failed with status: ${result.status}`);
+        }
+
+    } catch (error) {
+        const errorDetail = error.response?.data || error.message;
+        console.error('Text-to-Image Error:', errorDetail);
+        res.status(500).json({
+            success: false,
+            message: '图片生成失败',
+            detail: typeof errorDetail === 'string' ? errorDetail : JSON.stringify(errorDetail)
+        });
+    }
+});
+
 app.listen(PORT, () => {
-    console.log(`服务器运行在 http://0.0.0.0:${PORT}`);
+    console.log(`服务器运行在 http://localhost:${PORT}`);
 });
