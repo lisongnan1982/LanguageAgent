@@ -171,6 +171,14 @@
                                class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none">
                         <p class="text-[10px] text-gray-400 mt-1">用于文生图功能。在 <a href="https://replicate.com/account/api-tokens" target="_blank" class="text-blue-600 hover:underline">Replicate</a> 获取 API Token</p>
                     </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">图片生成模型</label>
+                        <select id="replicateModel" class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none bg-white">
+                            <option value="realistic-vision-v5.1">Realistic Vision v5.1 (写实风格)</option>
+                            <option value="realvisxl-v3.0-turbo">RealVisXL v3.0 Turbo (快速生成)</option>
+                        </select>
+                        <p class="text-[10px] text-gray-400 mt-1">Realistic Vision: 写实照片风格 | RealVisXL: 更快速，风格多样</p>
+                    </div>
                 </div>
                 <div class="flex justify-end gap-3 mt-6">
                     <button id="closeSettings" class="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded-lg">关闭</button>
@@ -241,6 +249,7 @@
             volcTtsCluster: localStorage.getItem('volc_tts_cluster') || 'volcano_tts',
             volcTtsVoice: localStorage.getItem('volc_tts_voice') || 'zh_female_vv_uranus_bigtts',
             replicateToken: localStorage.getItem('replicate_token') || '',
+            replicateModel: localStorage.getItem('replicate_model') || 'realistic-vision-v5.1',
             allModels: [], // Store all fetched models for filtering
             roles: [
                 { id: 'coach', name: '专业健身教练', desc: '充满动力的科学指导者', prompt: 'You are a professional fitness coach with 10 years of experience. You are enthusiastic, positive, and speak with high motivation. You provide scientific training advice and nutritional guidance while constantly encouraging the user to persevere. Your responses should be professional, practical, and full of positive energy. Please respond in Chinese.', icon: '💪' },
@@ -293,6 +302,7 @@
             volcTtsCluster: document.getElementById('volcTtsCluster'),
             volcTtsVoice: document.getElementById('volcTtsVoice'),
             replicateToken: document.getElementById('replicateToken'),
+            replicateModel: document.getElementById('replicateModel'),
             activeRoleName: document.getElementById('activeRoleName'),
             activeRoleDesc: document.getElementById('activeRoleDesc'),
             activeRoleHeader: document.getElementById('activeRoleHeader'),
@@ -326,6 +336,7 @@
             elements.volcTtsCluster.value = state.volcTtsCluster;
             elements.volcTtsVoice.value = state.volcTtsVoice;
             elements.replicateToken.value = state.replicateToken;
+            elements.replicateModel.value = state.replicateModel;
             if (state.apiKey) {
                 fetchModels();
             }
@@ -348,6 +359,7 @@
                 state.volcTtsCluster = elements.volcTtsCluster.value;
                 state.volcTtsVoice = elements.volcTtsVoice.value;
                 state.replicateToken = elements.replicateToken.value;
+                state.replicateModel = elements.replicateModel.value;
                 localStorage.setItem('openrouter_api_key', state.apiKey);
                 localStorage.setItem('selected_model', state.selectedModel);
                 localStorage.setItem('volc_appid', state.volcAppId);
@@ -357,6 +369,7 @@
                 localStorage.setItem('volc_tts_cluster', state.volcTtsCluster);
                 localStorage.setItem('volc_tts_voice', state.volcTtsVoice);
                 localStorage.setItem('replicate_token', state.replicateToken);
+                localStorage.setItem('replicate_model', state.replicateModel);
                 elements.settingsModal.classList.add('hidden');
                 checkInputs();
             };
@@ -1227,7 +1240,8 @@ Respond ONLY with the suggested text, no explanations.`
                         messages: messages,
                         tools: [TEXT_TO_IMAGE_TOOL],
                         tool_choice: 'auto',
-                        replicateToken: state.replicateToken
+                        replicateToken: state.replicateToken,
+                        replicateModel: state.replicateModel
                     })
                 });
 

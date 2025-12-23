@@ -54,13 +54,36 @@ const TEXT_TO_IMAGE_TOOL = {
     }
 };
 
+// 图片生成模型配置
+const IMAGE_MODELS = {
+    'realistic-vision-v5.1': {
+        version: 'lucataco/realistic-vision-v5.1:2c8e954decbf70b7607a4414e5785ef9e4de4b8c51d50fb8b8b349160e0ef6bb',
+        defaultWidth: 512,
+        defaultHeight: 512,
+        steps: 20,
+        guidance: 5,
+        scheduler: 'EulerA'
+    },
+    'realvisxl-v3.0-turbo': {
+        version: 'adirik/realvisxl-v3.0-turbo:6e941e7fe46955afc031f35e84312a792d546b0f434f9008d457eb9deb24575c',
+        defaultWidth: 512,
+        defaultHeight: 512,
+        steps: 25,
+        guidance: 7.5,
+        scheduler: null  // 使用模型默认
+    }
+};
+
 // LLM 代理接口 - 解决前端直接调用 OpenRouter 的 CORS 和身份验证问题
 // 支持 function calling（工具调用）
 app.post('/api/proxy-llm', async (req, res) => {
-    const { apiKey, model, messages, response_format, tools, tool_choice, replicateToken } = req.body;
+    const { apiKey, model, messages, response_format, tools, tool_choice, replicateToken, replicateModel } = req.body;
     if (!apiKey || !model || !messages) {
         return res.status(400).json({ success: false, message: '缺少必要参数' });
     }
+
+    // 获取图片模型配置
+    const imageModelConfig = IMAGE_MODELS[replicateModel] || IMAGE_MODELS['realistic-vision-v5.1'];
 
     try {
         // 构建请求参数
@@ -112,21 +135,32 @@ app.post('/api/proxy-llm', async (req, res) => {
                             continue;
                         }
 
+                        // 构建图片生成请求参数
+                        const imageInput = {
+                            seed: Math.floor(Math.random() * 10000),
+                            steps: imageModelConfig.steps,
+                            width: args.width || imageModelConfig.defaultWidth,
+                            height: args.height || imageModelConfig.defaultHeight,
+                            prompt: args.prompt,
+                            negative_prompt: args.negative_prompt || '(deformed iris, deformed pupils, semi-realistic, cgi, 3d, render, sketch, cartoon, drawing, anime:1.4), text, close up, cropped, out of frame, worst quality, low quality, jpeg artifacts, ugly, duplicate, morbid, mutilated, extra fingers, mutated hands, poorly drawn hands, poorly drawn face, mutation, deformed, blurry, dehydrated, bad anatomy, bad proportions, extra limbs, cloned face, disfigured, gross proportions, malformed limbs, missing arms, missing legs, extra arms, extra legs, fused fingers, too many fingers, long neck'
+                        };
+
+                        // 添加模型特定参数
+                        if (imageModelConfig.guidance) {
+                            imageInput.guidance = imageModelConfig.guidance;
+                        }
+                        if (imageModelConfig.scheduler) {
+                            imageInput.scheduler = imageModelConfig.scheduler;
+                        }
+
+                        console.log(`使用图片模型: ${replicateModel || 'realistic-vision-v5.1'}`);
+
                         // 调用 Replicate API 生成图片
                         const imageResponse = await axios.post(
                             'https://api.replicate.com/v1/predictions',
                             {
-                                version: 'lucataco/realistic-vision-v5.1:2c8e954decbf70b7607a4414e5785ef9e4de4b8c51d50fb8b8b349160e0ef6bb',
-                                input: {
-                                    seed: Math.floor(Math.random() * 10000),
-                                    steps: 20,
-                                    width: args.width || 512,
-                                    height: args.height || 728,
-                                    prompt: args.prompt,
-                                    guidance: 5,
-                                    scheduler: 'EulerA',
-                                    negative_prompt: args.negative_prompt || '(deformed iris, deformed pupils, semi-realistic, cgi, 3d, render, sketch, cartoon, drawing, anime:1.4), text, close up, cropped, out of frame, worst quality, low quality, jpeg artifacts, ugly, duplicate, morbid, mutilated, extra fingers, mutated hands, poorly drawn hands, poorly drawn face, mutation, deformed, blurry, dehydrated, bad anatomy, bad proportions, extra limbs, cloned face, disfigured, gross proportions, malformed limbs, missing arms, missing legs, extra arms, extra legs, fused fingers, too many fingers, long neck'
-                                }
+                                version: imageModelConfig.version,
+                                input: imageInput
                             },
                             {
                                 headers: {
@@ -134,7 +168,7 @@ app.post('/api/proxy-llm', async (req, res) => {
                                     'Content-Type': 'application/json',
                                     'Prefer': 'wait'
                                 },
-                                timeout: 60000
+                                timeout: 120000
                             }
                         );
 
@@ -492,21 +526,35 @@ app.post('/mcp/tools/call', async (req, res) => {
             });
         }
 
+        // 获取模型配置（MCP 默认使用 realistic-vision-v5.1）
+        const mcpModelConfig = IMAGE_MODELS[args.model] || IMAGE_MODELS['realistic-vision-v5.1'];
+
+        // 构建图片生成请求参数
+        const mcpImageInput = {
+            seed: Math.floor(Math.random() * 10000),
+            steps: args.steps || mcpModelConfig.steps,
+            width: args.width || mcpModelConfig.defaultWidth,
+            height: args.height || mcpModelConfig.defaultHeight,
+            prompt: args.prompt,
+            negative_prompt: args.negative_prompt || '(deformed iris, deformed pupils, semi-realistic, cgi, 3d, render, sketch, cartoon, drawing, anime:1.4), text, close up, cropped, out of frame, worst quality, low quality, jpeg artifacts, ugly, duplicate, morbid, mutilated, extra fingers, mutated hands, poorly drawn hands, poorly drawn face, mutation, deformed, blurry, dehydrated, bad anatomy, bad proportions, extra limbs, cloned face, disfigured, gross proportions, malformed limbs, missing arms, missing legs, extra arms, extra legs, fused fingers, too many fingers, long neck'
+        };
+
+        // 添加模型特定参数
+        if (mcpModelConfig.guidance) {
+            mcpImageInput.guidance = args.guidance || mcpModelConfig.guidance;
+        }
+        if (mcpModelConfig.scheduler) {
+            mcpImageInput.scheduler = mcpModelConfig.scheduler;
+        }
+
+        console.log(`MCP 使用图片模型: ${args.model || 'realistic-vision-v5.1'}`);
+
         // 调用 Replicate API
         const response = await axios.post(
             'https://api.replicate.com/v1/predictions',
             {
-                version: 'lucataco/realistic-vision-v5.1:2c8e954decbf70b7607a4414e5785ef9e4de4b8c51d50fb8b8b349160e0ef6bb',
-                input: {
-                    seed: Math.floor(Math.random() * 10000),
-                    steps: args.steps || 20,
-                    width: args.width || 512,
-                    height: args.height || 728,
-                    prompt: args.prompt,
-                    guidance: args.guidance || 5,
-                    scheduler: 'EulerA',
-                    negative_prompt: args.negative_prompt || '(deformed iris, deformed pupils, semi-realistic, cgi, 3d, render, sketch, cartoon, drawing, anime:1.4), text, close up, cropped, out of frame, worst quality, low quality, jpeg artifacts, ugly, duplicate, morbid, mutilated, extra fingers, mutated hands, poorly drawn hands, poorly drawn face, mutation, deformed, blurry, dehydrated, bad anatomy, bad proportions, extra limbs, cloned face, disfigured, gross proportions, malformed limbs, missing arms, missing legs, extra arms, extra legs, fused fingers, too many fingers, long neck'
-                }
+                version: mcpModelConfig.version,
+                input: mcpImageInput
             },
             {
                 headers: {
@@ -566,34 +614,43 @@ app.post('/mcp/tools/call', async (req, res) => {
 
 // 文生图接口 (Text-to-Image) - 使用 Replicate API
 app.post('/api/text-to-image', async (req, res) => {
-    const { apiToken, prompt, negative_prompt, width, height, num_inference_steps, guidance_scale } = req.body;
+    const { apiToken, prompt, negative_prompt, width, height, num_inference_steps, guidance_scale, model } = req.body;
 
     if (!apiToken || !prompt) {
         return res.status(400).json({ success: false, message: '缺少必要参数：apiToken 和 prompt' });
     }
 
     try {
+        // 获取模型配置
+        const restModelConfig = IMAGE_MODELS[model] || IMAGE_MODELS['realistic-vision-v5.1'];
+
         console.log('Submitting text-to-image request to Replicate...');
+        console.log('Model:', model || 'realistic-vision-v5.1');
         console.log('Prompt:', prompt);
+
+        // 构建请求参数
+        const restImageInput = {
+            seed: Math.floor(Math.random() * 10000),
+            steps: num_inference_steps || restModelConfig.steps,
+            width: width || restModelConfig.defaultWidth,
+            height: height || restModelConfig.defaultHeight,
+            prompt: prompt,
+            negative_prompt: negative_prompt || '(deformed iris, deformed pupils, semi-realistic, cgi, 3d, render, sketch, cartoon, drawing, anime:1.4), text, close up, cropped, out of frame, worst quality, low quality, jpeg artifacts, ugly, duplicate, morbid, mutilated, extra fingers, mutated hands, poorly drawn hands, poorly drawn face, mutation, deformed, blurry, dehydrated, bad anatomy, bad proportions, extra limbs, cloned face, disfigured, gross proportions, malformed limbs, missing arms, missing legs, extra arms, extra legs, fused fingers, too many fingers, long neck'
+        };
+
+        // 添加模型特定参数
+        if (restModelConfig.guidance) {
+            restImageInput.guidance = guidance_scale || restModelConfig.guidance;
+        }
+        if (restModelConfig.scheduler) {
+            restImageInput.scheduler = restModelConfig.scheduler;
+        }
 
         const response = await axios.post(
             'https://api.replicate.com/v1/predictions',
             {
-                version: 'adirik/realvisxl-v3.0-turbo:6e941e7fe46955afc031f35e84312a792d546b0f434f9008d457eb9deb24575c',
-                input: {
-                    width: width || 768,
-                    height: height || 768,
-                    prompt: prompt,
-                    refine: 'no_refiner',
-                    scheduler: 'DPM++_SDE_Karras',
-                    num_outputs: 1,
-                    guidance_scale: guidance_scale || 2,
-                    apply_watermark: false,
-                    high_noise_frac: 0.8,
-                    negative_prompt: negative_prompt || '(worst quality, low quality, illustration, 3d, 2d, painting, cartoons, sketch), open mouth',
-                    prompt_strength: 0.8,
-                    num_inference_steps: num_inference_steps || 25
-                }
+                version: restModelConfig.version,
+                input: restImageInput
             },
             {
                 headers: {
@@ -601,7 +658,7 @@ app.post('/api/text-to-image', async (req, res) => {
                     'Content-Type': 'application/json',
                     'Prefer': 'wait'
                 },
-                timeout: 60000 // 60秒超时
+                timeout: 120000 // 120秒超时
             }
         );
 
