@@ -669,7 +669,7 @@ app.post('/api/text-to-image', async (req, res) => {
                     'Content-Type': 'application/json',
                     'Prefer': 'wait'
                 },
-                timeout: 120000 // 120秒超时
+                timeout: 240000 // 240秒超时
             }
         );
 
@@ -706,5 +706,5 @@ app.post('/api/text-to-image', async (req, res) => {
 });
 
 app.listen(PORT, () => {
-    console.log(`服务器运行在 http://0.0.0.0:${PORT}`);
+    console.log(`服务器运行在 http://localhost:${PORT}`);
 });

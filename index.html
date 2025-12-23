@@ -48,7 +48,20 @@
         /* 移动端角色卡片删除按钮始终可见 */
         @media (max-width: 768px) {
             .role-card .delete-btn { opacity: 1 !important; }
-            .chat-container { height: calc(100dvh - 160px); height: calc(100vh - 160px); }
+            /* 移动端输入框固定在底部 */
+            .input-area-mobile-fixed {
+                position: fixed;
+                bottom: 0;
+                left: 0;
+                right: 0;
+                background: white;
+                border-top: 1px solid #e5e7eb;
+                z-index: 50;
+            }
+            /* 调整聊天容器高度，为固定输入框留出空间 */
+            .chat-container { height: calc(100dvh - 220px); height: calc(100vh - 220px); }
+            /* main 容器需要为固定输入框留出底部空间 */
+            .main-with-fixed-input { padding-bottom: 80px; }
             /* 增大消息气泡的播放按钮触摸区域 */
             .tts-btn {
                 width: 44px;
@@ -111,7 +124,7 @@
             </aside>
 
             <!-- Main Chat Area -->
-            <main class="flex-1 flex flex-col bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
+            <main id="mainChatArea" class="flex-1 flex flex-col bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
                 <!-- Chat Header -->
                 <div id="activeRoleHeader" class="p-3 md:p-4 border-b border-gray-100 bg-gray-50 flex items-center gap-2 md:gap-3">
                     <!-- 移动端点击头像可打开角色列表 -->
@@ -139,7 +152,7 @@
                 </div>
 
                 <!-- Input Area -->
-                <div class="input-area p-3 md:p-4 border-t border-gray-100">
+                <div id="inputArea" class="input-area p-3 md:p-4 border-t border-gray-100">
                     <form id="chatForm" class="flex gap-2 items-center">
                         <button type="button" id="voiceBtn"
                                 class="w-11 h-11 md:w-10 md:h-10 hidden items-center justify-center rounded-full bg-gray-100 hover:bg-blue-100 active:bg-blue-200 text-gray-500 hover:text-blue-600 transition-all disabled:opacity-50 flex-shrink-0"
@@ -265,11 +278,11 @@
         </div>
     </div>
 
-    <!-- Create Role Modal -->
+    <!-- Create/Edit Role Modal -->
     <div id="roleModal" class="fixed inset-0 bg-black bg-opacity-50 hidden flex items-end md:items-center justify-center z-50 md:p-4">
         <div class="bg-white rounded-t-2xl md:rounded-2xl p-4 md:p-6 w-full md:max-w-md shadow-xl max-h-[90vh] flex flex-col">
             <div class="flex justify-between items-center mb-4 flex-shrink-0">
-                <h2 class="text-xl font-bold">创建新角色</h2>
+                <h2 id="roleModalTitle" class="text-xl font-bold">创建新角色</h2>
                 <button id="closeRoleModal" class="p-2 -mr-2 text-gray-400 hover:text-gray-600">
                     <i class="fas fa-times text-xl"></i>
                 </button>
@@ -330,17 +343,29 @@
             replicateToken: localStorage.getItem('replicate_token') || '',
             replicateModel: localStorage.getItem('replicate_model') || 'realistic-vision-v5.1',
             allModels: [], // Store all fetched models for filtering
-            roles: [
-                { id: 'coach', name: '专业健身教练', desc: '充满动力的科学指导者', prompt: 'You are a professional fitness coach with 10 years of experience. You are enthusiastic, positive, and speak with high motivation. You provide scientific training advice and nutritional guidance while constantly encouraging the user to persevere. Your responses should be professional, practical, and full of positive energy. Please respond in Chinese.', icon: '💪' },
-                { id: 'bartender', name: '赛博朋克调酒师', desc: '反乌托邦世界的倾听者', prompt: 'You are a bartender under the neon lights of a cyberpunk metropolis in the year 2077. You have seen the highs and lows of human nature and speak with a hint of world-weariness and humor. You are an excellent listener, chatting with customers about life, technology, and this broken world while wiping glasses. Your responses should be emotional and carry a sci-fi atmosphere. Please respond in Chinese.', icon: '🍸' },
-                ...(JSON.parse(localStorage.getItem('custom_roles')) || [])
-            ],
+            roles: (() => {
+                // 内置角色
+                const builtinRoles = [
+                    { id: 'coach', name: '专业健身教练', desc: '充满动力的科学指导者', prompt: 'You are a professional fitness coach with 10 years of experience. You are enthusiastic, positive, and speak with high motivation. You provide scientific training advice and nutritional guidance while constantly encouraging the user to persevere. Your responses should be professional, practical, and full of positive energy. Please respond in Chinese.', icon: '💪' },
+                    { id: 'bartender', name: '赛博朋克调酒师', desc: '反乌托邦世界的倾听者', prompt: 'You are a bartender under the neon lights of a cyberpunk metropolis in the year 2077. You have seen the highs and lows of human nature and speak with a hint of world-weariness and humor. You are an excellent listener, chatting with customers about life, technology, and this broken world while wiping glasses. Your responses should be emotional and carry a sci-fi atmosphere. Please respond in Chinese.', icon: '🍸' }
+                ];
+                // 加载内置角色的编辑
+                const builtinEdits = JSON.parse(localStorage.getItem('builtin_role_edits')) || {};
+                const mergedBuiltin = builtinRoles.map(role => ({
+                    ...role,
+                    ...(builtinEdits[role.id] || {})
+                }));
+                // 加载自定义角色
+                const customRoles = JSON.parse(localStorage.getItem('custom_roles')) || [];
+                return [...mergedBuiltin, ...customRoles];
+            })(),
             currentRoleId: null,
             chatHistory: JSON.parse(localStorage.getItem('chat_history')) || {}, // roleId -> messages[]
             ttsCache: {}, // (text + voiceType) -> base64 audio
             currentAudio: null, // Track currently playing audio
             isPlayingAll: false, // Track if continuous playback is active
-            playAllQueue: [] // Queue for continuous playback
+            playAllQueue: [], // Queue for continuous playback
+            editingRoleId: null // Track which role is being edited (null = create mode)
         };
 
         // DOM Elements
@@ -359,6 +384,7 @@
             roleList: document.getElementById('roleList'),
             addRoleBtn: document.getElementById('addRoleBtn'),
             roleModal: document.getElementById('roleModal'),
+            roleModalTitle: document.getElementById('roleModalTitle'),
             closeRoleModal: document.getElementById('closeRoleModal'),
             cancelRoleModal: document.getElementById('cancelRoleModal'),
             saveRole: document.getElementById('saveRole'),
@@ -414,7 +440,11 @@
                 state.volcCluster = 'volc.bigasr.auc';
                 localStorage.setItem('volc_cluster', state.volcCluster);
             }
-            
+
+            // 移动端输入框固定在底部
+            setupMobileInputFixed();
+            window.addEventListener('resize', setupMobileInputFixed);
+
             renderRoles();
             elements.apiKeyInput.value = state.apiKey;
             elements.volcAppId.value = state.volcAppId;
@@ -429,6 +459,21 @@
                 fetchModels();
             }
             setupEventListeners();
+        }
+
+        // 移动端输入框固定在底部
+        function setupMobileInputFixed() {
+            const inputArea = document.getElementById('inputArea');
+            const mainArea = document.getElementById('mainChatArea');
+            const isMobile = window.innerWidth < 768;
+
+            if (isMobile) {
+                inputArea.classList.add('input-area-mobile-fixed');
+                mainArea.classList.add('main-with-fixed-input');
+            } else {
+                inputArea.classList.remove('input-area-mobile-fixed');
+                mainArea.classList.remove('main-with-fixed-input');
+            }
         }
 
         // 移动端侧边栏控制
@@ -451,7 +496,7 @@
             elements.mobileOverlay.onclick = closeMobileSidebar;
             elements.addRoleBtnMobile.onclick = () => {
                 closeMobileSidebar();
-                elements.roleModal.classList.remove('hidden');
+                openCreateRoleModal();
             };
             // 移动端点击头像打开侧边栏
             elements.roleAvatarBtn.onclick = () => {
@@ -505,10 +550,16 @@
                 ));
             };
 
-            elements.addRoleBtn.onclick = () => elements.roleModal.classList.remove('hidden');
-            elements.closeRoleModal.onclick = () => elements.roleModal.classList.add('hidden');
-            elements.cancelRoleModal.onclick = () => elements.roleModal.classList.add('hidden');
-            elements.saveRole.onclick = createRole;
+            elements.addRoleBtn.onclick = openCreateRoleModal;
+            elements.closeRoleModal.onclick = () => {
+                elements.roleModal.classList.add('hidden');
+                state.editingRoleId = null;
+            };
+            elements.cancelRoleModal.onclick = () => {
+                elements.roleModal.classList.add('hidden');
+                state.editingRoleId = null;
+            };
+            elements.saveRole.onclick = saveRole;
             elements.aiGenerateBtn.onclick = generateRoleWithAI;
             elements.autoReplyBtn.onclick = autoReply;
 
@@ -674,23 +725,39 @@
                 `;
                 div.appendChild(contentDiv);
 
+                // 按钮容器
+                const btnContainer = document.createElement('div');
+                const mobileClass = isMobile ? 'opacity-100' : 'opacity-0 group-hover:opacity-100';
+                btnContainer.className = `absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1 ${mobileClass} transition-all z-50`;
+
+                // 编辑按钮（所有角色都可编辑）
+                const editBtn = document.createElement('div');
+                editBtn.className = `text-gray-400 hover:text-blue-500 active:text-blue-600 cursor-pointer p-1 bg-white rounded-full shadow-sm ${isMobile ? 'w-10 h-10 flex items-center justify-center' : ''}`;
+                editBtn.innerHTML = `<i class="fas fa-edit ${isMobile ? 'text-xl' : 'text-lg'}"></i>`;
+                editBtn.title = '编辑角色';
+                editBtn.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    editRole(role.id);
+                    if (isMobile) closeMobileSidebar();
+                });
+                btnContainer.appendChild(editBtn);
+
+                // 删除按钮（仅自定义角色）
                 if (isCustom) {
                     const delBtn = document.createElement('div');
-                    // 移动端删除按钮始终可见且更大
-                    const mobileClass = isMobile ? 'opacity-100 w-10 h-10 flex items-center justify-center' : 'opacity-0 group-hover:opacity-100';
-                    delBtn.className = `delete-btn absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-red-500 active:text-red-600 ${mobileClass} transition-all cursor-pointer z-50 p-1 bg-white rounded-full shadow-sm`;
-                    delBtn.innerHTML = `<i class="fas fa-times-circle ${isMobile ? 'text-2xl' : 'text-xl'}"></i>`;
+                    delBtn.className = `text-gray-400 hover:text-red-500 active:text-red-600 cursor-pointer p-1 bg-white rounded-full shadow-sm ${isMobile ? 'w-10 h-10 flex items-center justify-center' : ''}`;
+                    delBtn.innerHTML = `<i class="fas fa-times-circle ${isMobile ? 'text-xl' : 'text-lg'}"></i>`;
                     delBtn.title = '删除角色';
-
                     delBtn.addEventListener('click', function(e) {
                         e.preventDefault();
                         e.stopPropagation();
                         deleteRole(role.id);
                     });
-
-                    div.appendChild(delBtn);
+                    btnContainer.appendChild(delBtn);
                 }
 
+                div.appendChild(btnContainer);
                 return div;
             }
 
@@ -709,16 +776,16 @@
 
         function deleteRole(roleId) {
             if (!confirm('确定要删除这个角色吗？相关的对话记录也将被清除。')) return;
-            
+
             // 1. Update state first
             state.roles = state.roles.filter(r => r.id !== roleId);
             delete state.chatHistory[roleId];
-            
+
             // 2. Persist to localStorage
             saveChatHistory();
             const customRoles = state.roles.filter(r => String(r.id).startsWith('custom-'));
             localStorage.setItem('custom_roles', JSON.stringify(customRoles));
-            
+
             // 3. Update UI
             if (state.currentRoleId === roleId) {
                 state.currentRoleId = null;
@@ -728,12 +795,50 @@
                 elements.clearChatBtn.classList.add('hidden');
                 renderMessages(); // Clear messages view
             }
-            
+
             // 4. Force re-render of role list immediately
             setTimeout(() => {
                 renderRoles();
                 checkInputs();
             }, 0);
+        }
+
+        function editRole(roleId) {
+            const role = state.roles.find(r => r.id === roleId);
+            if (!role) return;
+
+            // 设置编辑模式
+            state.editingRoleId = roleId;
+
+            // 更新弹窗标题
+            elements.roleModalTitle.textContent = '编辑角色';
+
+            // 填充现有数据
+            elements.newRoleName.value = role.name || '';
+            elements.newRoleDesc.value = role.desc || '';
+            elements.newRolePrompt.value = role.prompt || '';
+            elements.saveRole.dataset.generatedIcon = role.icon || '👤';
+
+            // 显示弹窗
+            elements.roleModal.classList.remove('hidden');
+        }
+
+        function openCreateRoleModal() {
+            // 清除编辑模式
+            state.editingRoleId = null;
+
+            // 更新弹窗标题
+            elements.roleModalTitle.textContent = '创建新角色';
+
+            // 清空输入
+            elements.newRoleName.value = '';
+            elements.newRoleDesc.value = '';
+            elements.newRolePrompt.value = '';
+            elements.aiPromptInput.value = '';
+            delete elements.saveRole.dataset.generatedIcon;
+
+            // 显示弹窗
+            elements.roleModal.classList.remove('hidden');
         }
 
         async function generateRoleWithAI() {
@@ -815,22 +920,55 @@ Respond ONLY with the JSON object. Do not include markdown code blocks.`;
             }
         }
 
-        function createRole() {
+        function saveRole() {
             const name = elements.newRoleName.value.trim();
             const desc = elements.newRoleDesc.value.trim();
             const prompt = elements.newRolePrompt.value.trim();
             const icon = elements.saveRole.dataset.generatedIcon || '✨';
             if (!name || !prompt) return alert('请填写名称和提示词');
 
-            const newRole = {
-                id: 'custom-' + Date.now(),
-                name, desc, prompt, icon
-            };
-            state.roles.push(newRole);
+            if (state.editingRoleId) {
+                // 编辑模式：更新现有角色
+                const roleIndex = state.roles.findIndex(r => r.id === state.editingRoleId);
+                if (roleIndex !== -1) {
+                    state.roles[roleIndex] = {
+                        ...state.roles[roleIndex],
+                        name, desc, prompt, icon
+                    };
+
+                    // 如果是当前选中的角色，更新显示
+                    if (state.currentRoleId === state.editingRoleId) {
+                        elements.activeRoleName.textContent = name;
+                        elements.activeRoleDesc.textContent = desc;
+                        elements.roleAvatarBtn.textContent = icon;
+                    }
+                }
+            } else {
+                // 创建模式：添加新角色
+                const newRole = {
+                    id: 'custom-' + Date.now(),
+                    name, desc, prompt, icon
+                };
+                state.roles.push(newRole);
+            }
+
+            // 保存自定义角色到 localStorage
             localStorage.setItem('custom_roles', JSON.stringify(state.roles.filter(r => String(r.id).startsWith('custom-'))));
+
+            // 对于内置角色的修改，我们需要单独存储
+            const builtinRoleEdits = {};
+            state.roles.forEach(r => {
+                if (!String(r.id).startsWith('custom-')) {
+                    builtinRoleEdits[r.id] = { name: r.name, desc: r.desc, prompt: r.prompt, icon: r.icon };
+                }
+            });
+            localStorage.setItem('builtin_role_edits', JSON.stringify(builtinRoleEdits));
+
             renderRoles();
             elements.roleModal.classList.add('hidden');
-            // Clear inputs
+
+            // 清理状态
+            state.editingRoleId = null;
             elements.newRoleName.value = '';
             elements.newRoleDesc.value = '';
             elements.newRolePrompt.value = '';
@@ -917,17 +1055,12 @@ Respond ONLY with the JSON object. Do not include markdown code blocks.`;
                 const imageHtml = msg.imageUrl ? `
                     <div class="mt-3 rounded-lg overflow-hidden border border-gray-200">
                         <img src="${msg.imageUrl}"
-                             alt="${msg.imagePrompt || '生成的图片'}"
+                             alt="生成的图片"
                              class="w-full h-auto cursor-pointer hover:opacity-90 transition-opacity"
                              onclick="window.open('${msg.imageUrl}', '_blank')"
                              loading="lazy"
+                             onload="document.getElementById('chatMessages').scrollTop = document.getElementById('chatMessages').scrollHeight"
                              onerror="this.onerror=null; this.parentElement.innerHTML='<div class=\\'p-4 text-center text-red-500\\'><i class=\\'fas fa-exclamation-triangle mr-2\\'></i>图片加载失败<br><small>${msg.imageUrl}</small></div>';">
-                        ${msg.imagePrompt ? `
-                            <div class="bg-gray-50 px-3 py-2 text-xs text-gray-600 border-t border-gray-200">
-                                <i class="fas fa-palette mr-1"></i>
-                                提示词: ${msg.imagePrompt}
-                            </div>
-                        ` : ''}
                     </div>
                 ` : '';
 
