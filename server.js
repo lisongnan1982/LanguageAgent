@@ -475,14 +475,14 @@ function parseResponse(data) {
     return { msgType, errorCode, payloadMsg };
 }
 
-function convertToWav(inputPath) {
+function convertToPcm(inputPath) {
     return new Promise((resolve, reject) => {
         const args = [
             '-i', inputPath,
             '-acodec', 'pcm_s16le',
             '-ac', '1',
             '-ar', '16000',
-            '-f', 'wav',
+            '-f', 's16le',
             '-'
         ];
         
@@ -508,10 +508,10 @@ app.post('/api/asr', upload.single('audio'), async (req, res) => {
 
     let ws = null;
     try {
-        // 1. Convert audio to required format (WAV, 16k, 1ch, s16le)
-        console.log('Converting audio...');
-        const wavBuffer = await convertToWav(audioFile.path);
-        console.log('Audio converted. Size:', wavBuffer.length);
+        // 1. Convert audio to required format (PCM s16le, 16k, 1ch)
+        console.log('Converting audio to PCM...');
+        const pcmBuffer = await convertToPcm(audioFile.path);
+        console.log('Audio converted. Size:', pcmBuffer.length);
 
         // 2. Setup WebSocket Connection
         // 兼容旧的 cluster 标识，如果为 volc_auc_common 则自动转换为 volc.bigasr.auc
@@ -577,10 +577,9 @@ app.post('/api/asr', upload.single('audio'), async (req, res) => {
         console.log('Sent Full Request');
 
         // 4. Send Audio Chunks
-        // Skip WAV header (44 bytes) for raw PCM
+        // Using Raw PCM, no header to skip
         const CHUNK_SIZE = 16000 * 2 * 0.2; // 200ms chunks
-        let offset = 44; // Skip WAV header
-        if (wavBuffer.length < 44) offset = 0; // Safety check
+        let offset = 0; 
         let finalResultText = '';
         let completed = false;
 
@@ -622,10 +621,10 @@ app.post('/api/asr', upload.single('audio'), async (req, res) => {
         });
 
         // Streaming loop
-        while (offset < wavBuffer.length) {
-            const end = Math.min(offset + CHUNK_SIZE, wavBuffer.length);
-            const chunk = wavBuffer.subarray(offset, end);
-            const isLast = end >= wavBuffer.length;
+        while (offset < pcmBuffer.length) {
+            const end = Math.min(offset + CHUNK_SIZE, pcmBuffer.length);
+            const chunk = pcmBuffer.subarray(offset, end);
+            const isLast = end >= pcmBuffer.length;
             
             const audioRequest = constructAudioRequest(seq++, chunk, isLast);
             ws.send(audioRequest);
