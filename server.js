@@ -29,7 +29,7 @@ const TEXT_TO_IMAGE_TOOL = {
             properties: {
                 prompt: {
                     type: 'string',
-                    description: '图片描述文本（必须使用英文）。详细描述想要生成的图片内容，包括主体、风格、质量等。例如："A cute cat sitting on clouds, digital art style, high quality, 8k uhd"。如果用户提供中文描述，请先翻译成英文。'
+                    description: '图片描述文本（必须使用英文）。详细描述想要生成的图片内容，包括主体、风格、质量等。例如："A cute cat sitting on clouds"。如果用户提供中文描述，请先翻译成英文。'
                 },
                 negative_prompt: {
                     type: 'string',

@@ -1515,12 +1515,16 @@ Respond ONLY with the JSON object. Do not include markdown code blocks.`;
             const messages = [
                 { 
                     role: 'system', 
-                    content: `You are an AI assistant helping the user in a role-play with a character named "${role.name}". 
+                    content: `You are an AI writing assistant for a role-play game.
+The user is playing a role and talking to a character named "${role.name}".
 The character's profile is: ${role.prompt}
 
-Based on the conversation history, suggest a natural, engaging response that the USER should say next. 
-The response should be in Chinese, consistent with the role-play context, and move the story forward.
-Respond ONLY with the suggested text, no explanations.` 
+Your task is to generate a suggested response for the USER to say to the character.
+The response must be:
+1. From the perspective of the USER (the player), NOT the character.
+2. Natural, engaging, and driving the plot forward.
+3. In Chinese.
+4. Respond ONLY with the suggested text, no other words.` 
                 },
                 ...chatHistory.slice(-10) // Send last 10 messages for context
             ];
