@@ -379,6 +379,7 @@
             chatHistory: JSON.parse(localStorage.getItem('chat_history')) || {}, // roleId -> messages[]
             ttsCache: {}, // (text + voiceType) -> base64 audio
             currentAudio: null, // Track currently playing audio
+            currentPlayingIndex: null, // Track which message index is currently playing
             isPlayingAll: false, // Track if continuous playback is active
             playAllQueue: [], // Queue for continuous playback
             editingRoleId: null, // Track which role is being edited (null = create mode)
@@ -414,6 +415,32 @@
                     state.currentAudio.currentTime = 0;
                 }
                 state.currentAudio = null;
+            }
+            
+            // If we were playing a specific message, reset its button state
+            if (state.currentPlayingIndex !== null) {
+                const btn = document.querySelector(`button[data-msg-index="${state.currentPlayingIndex}"]`);
+                if (btn) {
+                    const icon = btn.querySelector('i');
+                    if (icon) icon.className = 'fas fa-volume-up';
+                    btn.classList.remove('text-blue-600', 'animate-pulse');
+                    
+                    // Restore cache color state if needed
+                    const voiceType = state.volcTtsVoice || 'zh_female_vv_uranus_bigtts';
+                    const messages = state.chatHistory[state.currentRoleId] || [];
+                    const msg = messages[state.currentPlayingIndex];
+                    if (msg) {
+                        const cacheKey = msg.content + '_' + voiceType;
+                        if (state.ttsCache[cacheKey]) {
+                            btn.classList.remove('text-gray-400', 'hover:text-blue-500');
+                            btn.classList.add('text-green-500', 'hover:text-green-600');
+                        } else {
+                            btn.classList.remove('text-green-500', 'hover:text-green-600');
+                            btn.classList.add('text-gray-400', 'hover:text-blue-500');
+                        }
+                    }
+                }
+                state.currentPlayingIndex = null;
             }
         }
 
@@ -1164,15 +1191,15 @@ Respond ONLY with the JSON object. Do not include markdown code blocks.`;
             }
             const text = messages[index].content;
 
-            // Resume AudioContext immediately on user interaction to handle long fetch times
-            const ctx = getAudioContext();
-            if (ctx.state === 'suspended') {
-                ctx.resume();
-            }
-
             // Stop continuous playback if active
             if (state.isPlayingAll) {
                 stopPlayAll();
+            }
+
+            // Check if this button is currently playing - if so, stop it (toggle behavior)
+            if (state.currentPlayingIndex === index && state.currentAudio) {
+                stopCurrentAudio();
+                return;
             }
 
             // Helper to get the current button instance (in case DOM re-rendered)
@@ -1248,33 +1275,40 @@ Respond ONLY with the JSON object. Do not include markdown code blocks.`;
             const voiceType = state.volcTtsVoice || 'zh_female_vv_uranus_bigtts';
             const cacheKey = text + '_' + voiceType;
 
-            const playAudioData = async (base64Data) => {
-                try {
-                    const arrayBuffer = base64ToArrayBuffer(base64Data);
-                    const audioBuffer = await ctx.decodeAudioData(arrayBuffer);
-                    
-                    stopCurrentAudio(); 
-                    
-                    const source = ctx.createBufferSource();
-                    source.buffer = audioBuffer;
-                    source.connect(ctx.destination);
-                    
-                    state.currentAudio = source;
-                    
-                    updateButtonState(false, true);
+            const playAudioData = (base64Data) => {
+                // Double check if user stopped it while we were fetching
+                if (state.currentPlayingIndex !== null && state.currentPlayingIndex !== index) {
+                    return;
+                }
 
-                    source.onended = () => {
-                        updateButtonState(false, false);
-                        state.currentAudio = null;
-                    };
+                stopCurrentAudio();
+                
+                const audio = new Audio("data:audio/mp3;base64," + base64Data);
+                state.currentAudio = audio;
+                state.currentPlayingIndex = index;
 
-                    source.start(0);
-                } catch (e) {
+                updateButtonState(false, true);
+
+                audio.onended = () => {
+                    updateButtonState(false, false);
+                    state.currentAudio = null;
+                    state.currentPlayingIndex = null;
+                };
+
+                audio.onerror = (e) => {
                     console.error('Audio Playback Error:', e);
                     alert('音频播放失败');
                     updateButtonState(false, false);
                     state.currentAudio = null;
-                }
+                    state.currentPlayingIndex = null;
+                };
+
+                audio.play().catch(e => {
+                    console.error('Play Promise Error:', e);
+                    updateButtonState(false, false);
+                    state.currentAudio = null;
+                    state.currentPlayingIndex = null;
+                });
             };
 
             // Check cache first
