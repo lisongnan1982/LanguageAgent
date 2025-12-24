@@ -250,6 +250,18 @@
                         <input type="text" id="volcTtsVoice" placeholder="例如: zh_female_vv_uranus_bigtts"
                                class="w-full px-4 py-3 md:py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-base">
                     </div>
+                    <div class="pt-2 border-t border-gray-100 mt-2">
+                        <div class="flex items-center justify-between mb-2">
+                            <label for="autoTtsEnabled" class="text-sm font-medium text-gray-700">自动播放短回复</label>
+                            <input type="checkbox" id="autoTtsEnabled" class="w-5 h-5 text-blue-600 rounded border-gray-300 focus:ring-blue-500">
+                        </div>
+                        <div id="autoTtsThresholdContainer" class="hidden">
+                            <label class="block text-sm font-medium text-gray-700 mb-1">最大字符数限制</label>
+                            <input type="number" id="autoTtsThreshold" placeholder="100"
+                                   class="w-full px-4 py-3 md:py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-base">
+                            <p class="text-[10px] text-gray-400 mt-1">仅当回复字数少于此值时自动播放</p>
+                        </div>
+                    </div>
                 </div>
                 <hr class="border-gray-100">
                 <div class="space-y-3">
@@ -342,6 +354,8 @@
             volcCluster: localStorage.getItem('volc_cluster') || 'volc.bigasr.auc',
             volcTtsCluster: localStorage.getItem('volc_tts_cluster') || 'volcano_tts',
             volcTtsVoice: localStorage.getItem('volc_tts_voice') || 'zh_female_vv_uranus_bigtts',
+            autoTtsEnabled: localStorage.getItem('auto_tts_enabled') === 'true',
+            autoTtsThreshold: parseInt(localStorage.getItem('auto_tts_threshold') || '100'),
             replicateToken: localStorage.getItem('replicate_token') || '',
             replicateModel: localStorage.getItem('replicate_model') || 'realistic-vision-v5.1',
             allModels: [], // Store all fetched models for filtering
@@ -442,6 +456,9 @@
             volcCluster: document.getElementById('volcCluster'),
             volcTtsCluster: document.getElementById('volcTtsCluster'),
             volcTtsVoice: document.getElementById('volcTtsVoice'),
+            autoTtsEnabled: document.getElementById('autoTtsEnabled'),
+            autoTtsThreshold: document.getElementById('autoTtsThreshold'),
+            autoTtsThresholdContainer: document.getElementById('autoTtsThresholdContainer'),
             replicateToken: document.getElementById('replicateToken'),
             replicateModel: document.getElementById('replicateModel'),
             activeRoleName: document.getElementById('activeRoleName'),
@@ -488,6 +505,9 @@
             elements.volcCluster.value = state.volcCluster;
             elements.volcTtsCluster.value = state.volcTtsCluster;
             elements.volcTtsVoice.value = state.volcTtsVoice;
+            elements.autoTtsEnabled.checked = state.autoTtsEnabled;
+            elements.autoTtsThreshold.value = state.autoTtsThreshold;
+            if (state.autoTtsEnabled) elements.autoTtsThresholdContainer.classList.remove('hidden');
             elements.replicateToken.value = state.replicateToken;
             elements.replicateModel.value = state.replicateModel;
             if (state.apiKey) {
@@ -555,8 +575,11 @@
                 state.volcCluster = elements.volcCluster.value;
                 state.volcTtsCluster = elements.volcTtsCluster.value;
                 state.volcTtsVoice = elements.volcTtsVoice.value;
+                state.autoTtsEnabled = elements.autoTtsEnabled.checked;
+                state.autoTtsThreshold = parseInt(elements.autoTtsThreshold.value) || 100;
                 state.replicateToken = elements.replicateToken.value;
                 state.replicateModel = elements.replicateModel.value;
+                
                 localStorage.setItem('openrouter_api_key', state.apiKey);
                 localStorage.setItem('selected_model', state.selectedModel);
                 localStorage.setItem('volc_appid', state.volcAppId);
@@ -565,10 +588,21 @@
                 localStorage.setItem('volc_cluster', state.volcCluster);
                 localStorage.setItem('volc_tts_cluster', state.volcTtsCluster);
                 localStorage.setItem('volc_tts_voice', state.volcTtsVoice);
+                localStorage.setItem('auto_tts_enabled', state.autoTtsEnabled);
+                localStorage.setItem('auto_tts_threshold', state.autoTtsThreshold);
                 localStorage.setItem('replicate_token', state.replicateToken);
                 localStorage.setItem('replicate_model', state.replicateModel);
+                
                 elements.settingsModal.classList.add('hidden');
                 checkInputs();
+            };
+
+            elements.autoTtsEnabled.onchange = () => {
+                if (elements.autoTtsEnabled.checked) {
+                    elements.autoTtsThresholdContainer.classList.remove('hidden');
+                } else {
+                    elements.autoTtsThresholdContainer.classList.add('hidden');
+                }
             };
 
             elements.verifyKey.onclick = () => {
@@ -1115,11 +1149,20 @@ Respond ONLY with the JSON object. Do not include markdown code blocks.`;
             elements.chatMessages.scrollTop = elements.chatMessages.scrollHeight;
         }
 
-        async function playTts(text, btn, index) {
+        async function playTts(ignoredText, btn, index) {
             if (!state.volcAppId || !state.volcTtsToken) {
                 alert('请先在设置中配置火山引擎 TTS 参数 (AppID 和 Access Token)');
                 return;
             }
+
+            // Get authoritative text from state to ensure cache key consistency
+            // The text passed in arguments might have newlines replaced with spaces due to onclick HTML attribute limitations
+            const messages = state.chatHistory[state.currentRoleId];
+            if (!messages || !messages[index]) {
+                console.error('Message not found for TTS');
+                return;
+            }
+            const text = messages[index].content;
 
             // Resume AudioContext immediately on user interaction to handle long fetch times
             const ctx = getAudioContext();
@@ -1519,6 +1562,14 @@ Respond ONLY with the suggested text, no explanations.`
             const content = elements.userInput.value.trim();
             if (!content || !state.apiKey || !state.currentRoleId) return;
 
+            // Pre-warm AudioContext on user interaction to ensure auto-play works later
+            if (state.autoTtsEnabled) {
+                const ctx = getAudioContext();
+                if (ctx.state === 'suspended') {
+                    ctx.resume();
+                }
+            }
+
             const role = state.roles.find(r => r.id === state.currentRoleId);
             if (!state.chatHistory[state.currentRoleId]) {
                 state.chatHistory[state.currentRoleId] = [];
@@ -1634,6 +1685,19 @@ Respond ONLY with the suggested text, no explanations.`
                 console.error(error);
             }
             renderMessages();
+
+            // Auto Play TTS if enabled and length matches
+            if (state.autoTtsEnabled && aiMsg.role === 'assistant' && aiMsg.content && aiMsg.content !== '...' && !aiMsg.content.startsWith('网络请求失败') && !aiMsg.content.startsWith('图片生成失败')) {
+                const len = aiMsg.content.length;
+                if (len <= state.autoTtsThreshold) {
+                    const lastIndex = state.chatHistory[state.currentRoleId].length - 1;
+                    const btn = document.querySelector(`button[data-msg-index="${lastIndex}"]`);
+                    if (btn) {
+                        console.log(`Auto-playing TTS (Length: ${len}, Threshold: ${state.autoTtsThreshold})`);
+                        playTts(aiMsg.content, btn, lastIndex);
+                    }
+                }
+            }
         }
 
         init();
