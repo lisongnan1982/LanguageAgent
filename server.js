@@ -528,11 +528,9 @@ app.post('/api/asr', upload.single('audio'), async (req, res) => {
         const wsUrl = 'wss://openspeech.bytedance.com/api/v3/sauc/bigmodel';
         const reqId = crypto.randomUUID();
         
+        // Correct headers according to python demo
         const headers = {
-            "X-Api-Resource-Id": targetResource,
-            "X-Api-Request-Id": reqId,
-            "X-Api-Access-Key": token.trim(),
-            "X-Api-App-Key": appid.trim()
+            "Authorization": `Bearer; ${token.trim()}`
         };
 
         console.log('Connecting to ASR WebSocket:', wsUrl);
@@ -540,27 +538,40 @@ app.post('/api/asr', upload.single('audio'), async (req, res) => {
 
         await new Promise((resolve, reject) => {
             ws.on('open', resolve);
-            ws.on('error', reject);
+            ws.on('error', (err) => {
+                console.error('WebSocket Handshake Error:', err);
+                reject(err);
+            });
         });
         console.log('WebSocket Connected');
 
         // 3. Send Full Client Request
         let seq = 1;
         const requestPayload = {
-            user: { uid: "roleplay_chat_user" },
-            audio: {
-                format: "wav",
-                codec: "raw", // We are sending raw wav bytes (including header) as per demo
-                rate: 16000,
-                bits: 16,
-                channel: 1
+            app: {
+                appid: appid.trim(),
+                cluster: targetResource,
+                token: token.trim()
+            },
+            user: { 
+                uid: "roleplay_chat_user" 
             },
             request: {
-                model_name: "bigmodel",
-                enable_itn: true,
-                enable_punc: true,
-                enable_ddc: true,
-                show_utterances: true
+                reqid: reqId,
+                nbest: 1,
+                workflow: "audio_in,resample,partition,vad,fe,decode,itn,nlu_punctuate",
+                show_language: false,
+                show_utterances: true,
+                result_type: "full",
+                sequence: 1
+            },
+            audio: {
+                format: "wav",
+                rate: 16000,
+                language: "zh-CN",
+                bits: 16,
+                channel: 1,
+                codec: "raw"
             }
         };
 
@@ -569,13 +580,10 @@ app.post('/api/asr', upload.single('audio'), async (req, res) => {
         console.log('Sent Full Request');
 
         // 4. Send Audio Chunks
-        // Skip WAV header (44 bytes) if strictly sending PCM?
-        // Demo says "codec: raw" but input is "format: wav".
-        // Demo reads file and converts to wav using ffmpeg and sends the whole thing including header.
-        // So we send `wavBuffer` as is, but chunked.
-        
-        const CHUNK_SIZE = 16000 * 2 * 0.2; // 200ms chunks (16k sample rate * 2 bytes/sample * 0.2s)
-        let offset = 0;
+        // Skip WAV header (44 bytes) for raw PCM
+        const CHUNK_SIZE = 16000 * 2 * 0.2; // 200ms chunks
+        let offset = 44; // Skip WAV header
+        if (wavBuffer.length < 44) offset = 0; // Safety check
         let finalResultText = '';
         let completed = false;
 
