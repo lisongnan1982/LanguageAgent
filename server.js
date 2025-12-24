@@ -84,6 +84,7 @@ const IMAGE_MODELS = {
         version: 'prunaai/qwen-image-fast:01b324d214eb4870ff424dc4215c067759c4c01a8751e327a434e2b16054db2f',
         defaultAspectRatio: '1:1',
         creativity: 0.62,
+        disable_safety_checker: true,
         useAspectRatio: true  // 标记使用 aspect_ratio 而非 width/height
     },
     'p-image': {
@@ -91,6 +92,7 @@ const IMAGE_MODELS = {
         defaultAspectRatio: '16:9',
         promptUpsampling: false,
         useAspectRatio: true,
+        disable_safety_checker: true,
         useModelEndpoint: true  // 标记使用 model endpoint
     }
 };
@@ -165,6 +167,7 @@ app.post('/api/proxy-llm', async (req, res) => {
                             // 新模型使用 aspect_ratio 参数
                             imageInput = {
                                 prompt: args.prompt,
+                                disable_safety_checker: true,
                                 aspect_ratio: args.aspect_ratio || imageModelConfig.defaultAspectRatio
                             };
 
