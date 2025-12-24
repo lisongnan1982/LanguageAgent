@@ -1200,7 +1200,7 @@ Respond ONLY with the JSON object. Do not include markdown code blocks.`;
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
-                        text: text.substring(0, 500), // 限制长度
+                        text: text.substring(0, 1500), // 限制长度
                         appid: state.volcAppId,
                         token: state.volcTtsToken,
                         cluster: state.volcTtsCluster,
