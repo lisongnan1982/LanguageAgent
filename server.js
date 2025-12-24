@@ -563,7 +563,7 @@ app.post('/api/asr', upload.single('audio'), async (req, res) => {
                 sequence: 1
             },
             audio: {
-                format: "wav",
+                format: "raw",
                 rate: 16000,
                 language: "zh-CN",
                 bits: 16,
