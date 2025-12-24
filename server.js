@@ -515,9 +515,10 @@ app.post('/api/asr', upload.single('audio'), async (req, res) => {
 
         // 2. Setup WebSocket Connection
         // 兼容旧的 cluster 标识，如果为 volc_auc_common 则自动转换为 volc.bigasr.auc
-        let targetResource = cluster || 'volc.bigasr.auc';
+        // Default to 'volcengine_streaming_common' which is verified to work with v2
+        let targetResource = cluster || 'volcengine_streaming_common';
         if (targetResource === 'volc_auc_common') {
-            targetResource = 'volc.bigasr.auc';
+            targetResource = 'volcengine_streaming_common';
         }
         
         // Use streaming endpoint (v2 with query params)
