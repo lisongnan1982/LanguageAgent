@@ -5,6 +5,10 @@ const multer = require('multer');
 const axios = require('axios');
 const fs = require('fs');
 const crypto = require('crypto');
+const WebSocket = require('ws');
+const zlib = require('zlib');
+const { execFile } = require('child_process');
+const ffmpegPath = require('ffmpeg-static');
 
 const app = express();
 const upload = multer({ dest: 'uploads/' });
@@ -354,7 +358,150 @@ app.post('/api/tts', async (req, res) => {
     }
 });
 
-// 火山引擎语音识别接口 (ASR) - 使用 v3/auc/bigmodel API
+// Volcengine ASR Streaming Protocol Constants
+const PROTOCOL_VERSION = 0b0001;
+const HEADER_SIZE = 1;
+const MESSAGE_TYPE = {
+    FULL_CLIENT_REQUEST: 0b0001,
+    AUDIO_ONLY_REQUEST: 0b0010,
+    FULL_SERVER_RESPONSE: 0b1001,
+    SERVER_ERROR_RESPONSE: 0b1111
+};
+const MESSAGE_FLAGS = {
+    NO_SEQUENCE: 0b0000,
+    POS_SEQUENCE: 0b0001,
+    NEG_SEQUENCE: 0b0010,
+    NEG_WITH_SEQUENCE: 0b0011
+};
+const SERIALIZATION = {
+    NO: 0b0000,
+    JSON: 0b0001
+};
+const COMPRESSION = {
+    NO: 0b0000,
+    GZIP: 0b0001
+};
+
+// Protocol Helpers
+function constructHeader(msgType, msgFlags, serialization, compression) {
+    const header = Buffer.alloc(4);
+    header[0] = (PROTOCOL_VERSION << 4) | HEADER_SIZE;
+    header[1] = (msgType << 4) | msgFlags;
+    header[2] = (serialization << 4) | compression;
+    header[3] = 0x00;
+    return header;
+}
+
+function constructFullRequest(seq, payload) {
+    const header = constructHeader(
+        MESSAGE_TYPE.FULL_CLIENT_REQUEST,
+        MESSAGE_FLAGS.POS_SEQUENCE,
+        SERIALIZATION.JSON,
+        COMPRESSION.GZIP
+    );
+    const payloadBytes = Buffer.from(JSON.stringify(payload));
+    const compressedPayload = zlib.gzipSync(payloadBytes);
+    
+    const seqBuf = Buffer.alloc(4);
+    seqBuf.writeInt32BE(seq);
+    
+    const sizeBuf = Buffer.alloc(4);
+    sizeBuf.writeUInt32BE(compressedPayload.length);
+    
+    return Buffer.concat([header, seqBuf, sizeBuf, compressedPayload]);
+}
+
+function constructAudioRequest(seq, audioData, isLast) {
+    const header = constructHeader(
+        MESSAGE_TYPE.AUDIO_ONLY_REQUEST,
+        isLast ? MESSAGE_FLAGS.NEG_WITH_SEQUENCE : MESSAGE_FLAGS.POS_SEQUENCE,
+        SERIALIZATION.NO,
+        COMPRESSION.GZIP
+    );
+    
+    // Last package uses negative sequence in demonstration code
+    const actualSeq = isLast ? -seq : seq;
+    const seqBuf = Buffer.alloc(4);
+    seqBuf.writeInt32BE(actualSeq);
+    
+    const compressedAudio = zlib.gzipSync(audioData);
+    const sizeBuf = Buffer.alloc(4);
+    sizeBuf.writeUInt32BE(compressedAudio.length);
+    
+    return Buffer.concat([header, seqBuf, sizeBuf, compressedAudio]);
+}
+
+function parseResponse(data) {
+    if (data.length < 4) return null;
+    const headerSize = data[0] & 0x0f;
+    const msgType = data[1] >> 4;
+    const msgFlags = data[1] & 0x0f;
+    const serialization = data[2] >> 4;
+    const compression = data[2] & 0x0f;
+    
+    let offset = headerSize * 4;
+    
+    // Skip sequence if present
+    if ((msgFlags & 0x01) || (msgFlags & 0x03) === 0x03) { // POS_SEQUENCE or NEG_WITH_SEQUENCE
+        offset += 4;
+    }
+    
+    // Skip event if present (server implementation detail, usually not present in simple response)
+    
+    let payloadMsg = null;
+    let payloadSize = 0;
+    let errorCode = 0;
+    
+    if (msgType === MESSAGE_TYPE.FULL_SERVER_RESPONSE) {
+        payloadSize = data.readUInt32BE(offset);
+        offset += 4;
+    } else if (msgType === MESSAGE_TYPE.SERVER_ERROR_RESPONSE) {
+        errorCode = data.readInt32BE(offset);
+        offset += 4;
+        payloadSize = data.readUInt32BE(offset);
+        offset += 4;
+    }
+    
+    if (payloadSize > 0 && offset + payloadSize <= data.length) {
+        let payload = data.subarray(offset, offset + payloadSize);
+        try {
+            if (compression === COMPRESSION.GZIP) {
+                payload = zlib.gunzipSync(payload);
+            }
+            if (serialization === SERIALIZATION.JSON) {
+                payloadMsg = JSON.parse(payload.toString());
+            }
+        } catch (e) {
+            console.error('Payload parse error:', e);
+        }
+    }
+    
+    return { msgType, errorCode, payloadMsg };
+}
+
+function convertToWav(inputPath) {
+    return new Promise((resolve, reject) => {
+        const args = [
+            '-i', inputPath,
+            '-acodec', 'pcm_s16le',
+            '-ac', '1',
+            '-ar', '16000',
+            '-f', 'wav',
+            '-'
+        ];
+        
+        execFile(ffmpegPath, args, { encoding: 'buffer', maxBuffer: 50 * 1024 * 1024 }, (error, stdout, stderr) => {
+            if (error) {
+                console.error('FFmpeg error:', stderr.toString());
+                reject(error);
+            } else {
+                resolve(stdout);
+            }
+        });
+    });
+}
+
+// 火山引擎语音识别接口 (ASR) - Streaming WebSocket Implementation
 app.post('/api/asr', upload.single('audio'), async (req, res) => {
     const { appid, token, cluster } = req.body;
     const audioFile = req.file;
@@ -363,121 +510,158 @@ app.post('/api/asr', upload.single('audio'), async (req, res) => {
         return res.status(400).json({ success: false, message: '缺少参数' });
     }
 
+    let ws = null;
     try {
-        const audioData = fs.readFileSync(audioFile.path);
-        const task_id = crypto.randomUUID();
+        // 1. Convert audio to required format (WAV, 16k, 1ch, s16le)
+        console.log('Converting audio...');
+        const wavBuffer = await convertToWav(audioFile.path);
+        console.log('Audio converted. Size:', wavBuffer.length);
+
+        // 2. Setup WebSocket Connection
         // 兼容旧的 cluster 标识，如果为 volc_auc_common 则自动转换为 volc.bigasr.auc
         let targetResource = cluster || 'volc.bigasr.auc';
         if (targetResource === 'volc_auc_common') {
             targetResource = 'volc.bigasr.auc';
         }
         
-        console.log('Submitting ASR task to Volcengine v3/auc/bigmodel...');
-        console.log('AppID:', appid.trim());
-        console.log('Resource ID:', targetResource);
-
-        // 1. 提交任务
-        const submit_url = 'https://openspeech-direct.zijieapi.com/api/v3/auc/bigmodel/submit';
+        // Use streaming endpoint (sauc)
+        const wsUrl = 'wss://openspeech.bytedance.com/api/v3/sauc/bigmodel';
+        const reqId = crypto.randomUUID();
+        
         const headers = {
-            "X-Api-App-Key": appid.trim(),
-            "X-Api-Access-Key": token.trim(),
             "X-Api-Resource-Id": targetResource,
-            "X-Api-Request-Id": task_id,
-            "X-Api-Sequence": "-1",
-            "Content-Type": "application/json"
+            "X-Api-Request-Id": reqId,
+            "X-Api-Access-Key": token.trim(),
+            "X-Api-App-Key": appid.trim()
         };
 
-        const submitRequest = {
-            "user": {
-                "uid": "roleplay_chat_user"
+        console.log('Connecting to ASR WebSocket:', wsUrl);
+        ws = new WebSocket(wsUrl, { headers });
+
+        await new Promise((resolve, reject) => {
+            ws.on('open', resolve);
+            ws.on('error', reject);
+        });
+        console.log('WebSocket Connected');
+
+        // 3. Send Full Client Request
+        let seq = 1;
+        const requestPayload = {
+            user: { uid: "roleplay_chat_user" },
+            audio: {
+                format: "wav",
+                codec: "raw", // We are sending raw wav bytes (including header) as per demo
+                rate: 16000,
+                bits: 16,
+                channel: 1
             },
-            "audio": {
-                "data": audioData.toString('base64'),
-                "format": "wav"
-            },
-            "request": {
-                "model_name": "bigmodel",
-                "enable_channel_split": true, 
-                "enable_ddc": true, 
-                "enable_speaker_info": true, 
-                "enable_punc": true, 
-                "enable_itn": true
+            request: {
+                model_name: "bigmodel",
+                enable_itn: true,
+                enable_punc: true,
+                enable_ddc: true,
+                show_utterances: true
             }
         };
 
-        const submitResponse = await axios.post(submit_url, submitRequest, { 
-            headers: headers,
-            timeout: 15000
-        });
+        const fullRequest = constructFullRequest(seq++, requestPayload);
+        ws.send(fullRequest);
+        console.log('Sent Full Request');
 
-        const statusCode = submitResponse.headers['x-api-status-code'];
-        if (statusCode !== "20000000") {
-            throw new Error(`Submit task failed with status: ${statusCode}, message: ${submitResponse.headers['x-api-message']}`);
-        }
+        // 4. Send Audio Chunks
+        // Skip WAV header (44 bytes) if strictly sending PCM?
+        // Demo says "codec: raw" but input is "format: wav".
+        // Demo reads file and converts to wav using ffmpeg and sends the whole thing including header.
+        // So we send `wavBuffer` as is, but chunked.
+        
+        const CHUNK_SIZE = 16000 * 2 * 0.2; // 200ms chunks (16k sample rate * 2 bytes/sample * 0.2s)
+        let offset = 0;
+        let finalResultText = '';
+        let completed = false;
 
-        const x_tt_logid = submitResponse.headers['x-tt-logid'];
-        console.log('Task submitted successfully. Task ID:', task_id, 'LogID:', x_tt_logid);
+        // Setup listener for results
+        const processingPromise = new Promise((resolve, reject) => {
+            ws.on('message', (data) => {
+                const response = parseResponse(data);
+                if (!response) return;
 
-        // 2. 轮询结果
-        const query_url = "https://openspeech-direct.zijieapi.com/api/v3/auc/bigmodel/query";
-        let finished = false;
-        let resultText = '';
-        let attempts = 0;
-        const maxAttempts = 30; 
-
-        while (!finished && attempts < maxAttempts) {
-            attempts++;
-            await new Promise(resolve => setTimeout(resolve, 2000));
-            
-            console.log(`Polling ASR result (attempt ${attempts})...`);
-            
-            const queryHeaders = {
-                "X-Api-App-Key": appid.trim(),
-                "X-Api-Access-Key": token.trim(),
-                "X-Api-Resource-Id": targetResource,
-                "X-Api-Request-Id": task_id,
-                "X-Tt-Logid": x_tt_logid
-            };
-
-            const queryResponse = await axios.post(query_url, {}, { headers: queryHeaders });
-            const code = queryResponse.headers['x-api-status-code'];
-
-            if (code === '20000000') {  // task finished
-                finished = true;
-                const respData = queryResponse.data;
-                if (respData && respData.result) {
-                    resultText = respData.result.text || '';
-                    if (!resultText && respData.result.utterances) {
-                        resultText = respData.result.utterances.map(u => u.text).join('');
+                if (response.msgType === MESSAGE_TYPE.SERVER_ERROR_RESPONSE) {
+                    console.error('ASR Server Error:', response.errorCode);
+                    reject(new Error(`ASR Server Error Code: ${response.errorCode}`));
+                } else if (response.msgType === MESSAGE_TYPE.FULL_SERVER_RESPONSE) {
+                    const result = response.payloadMsg;
+                    if (result) {
+                        // Check if final result
+                        // In streaming, we might get partial results, but for this file-upload simulation,
+                        // we wait for the final one or accumulate.
+                        // The demo prints "Received response".
+                        // Usually we look for 'result.text'.
+                        if (result.result) {
+                             // Assuming last message contains full text or we just take the last update
+                             finalResultText = result.result.text;
+                        }
                     }
                 }
-                console.log('ASR Success:', resultText);
-            } else if (code === '20000001' || code === '20000002') {
-                // Still processing
-                continue; 
-            } else {
-                throw new Error(`ASR Task failed with code: ${code}, message: ${queryResponse.headers['x-api-message']}`);
-            }
+            });
+            
+            ws.on('close', () => {
+                console.log('WebSocket Closed');
+                resolve();
+            });
+            
+            ws.on('error', (err) => {
+                reject(err);
+            });
+        });
+
+        // Streaming loop
+        while (offset < wavBuffer.length) {
+            const end = Math.min(offset + CHUNK_SIZE, wavBuffer.length);
+            const chunk = wavBuffer.subarray(offset, end);
+            const isLast = end >= wavBuffer.length;
+            
+            const audioRequest = constructAudioRequest(seq++, chunk, isLast);
+            ws.send(audioRequest);
+            
+            offset += CHUNK_SIZE;
+            // Slight delay to simulate stream? Not strictly necessary for file upload but good for stability
+            await new Promise(r => setTimeout(r, 20)); 
         }
+        console.log('Sent all audio chunks');
+
+        // Wait for connection close or timeout?
+        // Streaming ASR usually sends result then closes, or we close.
+        // But since we sent "isLast", server should process and finish.
+        // We need to wait a bit for final response.
+        
+        // Wait for a few seconds max for results, then close if not closed
+        const timeoutPromise = new Promise(r => setTimeout(r, 5000));
+        await Promise.race([processingPromise, timeoutPromise]);
+        
+        ws.close();
 
         if (fs.existsSync(audioFile.path)) fs.unlinkSync(audioFile.path);
 
-        if (finished) {
-            res.json({ success: true, text: resultText });
+        // Fallback: if text is empty, maybe try to check if we got anything
+        console.log('ASR Result:', finalResultText);
+        
+        if (finalResultText) {
+            res.json({ success: true, text: finalResultText });
         } else {
-            res.status(500).json({ success: false, message: '语音识别超时' });
+            res.status(500).json({ success: false, message: '未获取到识别结果' });
         }
 
     } catch (error) {
-        const errorMsg = error.response ? JSON.stringify(error.response.headers) : error.message;
-        console.error('ASR Error:', errorMsg);
-        
+        console.error('ASR Streaming Error:', error);
+        if (ws) {
+            try { ws.close(); } catch(e) {}
+        }
         if (audioFile && fs.existsSync(audioFile.path)) fs.unlinkSync(audioFile.path);
         
         res.status(500).json({ 
             success: false, 
-            message: '语音识别请求失败', 
-            detail: errorMsg 
+            message: '语音识别失败', 
+            detail: error.message 
         });
     }
 });
