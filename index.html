@@ -367,8 +367,41 @@
             currentAudio: null, // Track currently playing audio
             isPlayingAll: false, // Track if continuous playback is active
             playAllQueue: [], // Queue for continuous playback
-            editingRoleId: null // Track which role is being edited (null = create mode)
+            editingRoleId: null, // Track which role is being edited (null = create mode)
+            audioContext: null // Web Audio API Context
         };
+
+        // Audio Helpers
+        function getAudioContext() {
+            if (!state.audioContext) {
+                state.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            }
+            return state.audioContext;
+        }
+
+        function base64ToArrayBuffer(base64) {
+            const binaryString = window.atob(base64);
+            const len = binaryString.length;
+            const bytes = new Uint8Array(len);
+            for (let i = 0; i < len; i++) {
+                bytes[i] = binaryString.charCodeAt(i);
+            }
+            return bytes.buffer;
+        }
+
+        function stopCurrentAudio() {
+            if (state.currentAudio) {
+                if (state.currentAudio.stop) {
+                    // AudioBufferSourceNode
+                    try { state.currentAudio.stop(); } catch(e) {}
+                } else if (state.currentAudio.pause) {
+                    // HTMLAudioElement
+                    state.currentAudio.pause();
+                    state.currentAudio.currentTime = 0;
+                }
+                state.currentAudio = null;
+            }
+        }
 
         // DOM Elements
         const elements = {
@@ -980,10 +1013,7 @@ Respond ONLY with the JSON object. Do not include markdown code blocks.`;
 
         function selectRole(roleId) {
             // Stop any playing audio when switching roles
-            if (state.currentAudio) {
-                state.currentAudio.pause();
-                state.currentAudio = null;
-            }
+            stopCurrentAudio();
 
             // Stop continuous playback if active
             if (state.isPlayingAll) {
@@ -1091,6 +1121,12 @@ Respond ONLY with the JSON object. Do not include markdown code blocks.`;
                 return;
             }
 
+            // Resume AudioContext immediately on user interaction to handle long fetch times
+            const ctx = getAudioContext();
+            if (ctx.state === 'suspended') {
+                ctx.resume();
+            }
+
             // Stop continuous playback if active
             if (state.isPlayingAll) {
                 stopPlayAll();
@@ -1099,7 +1135,7 @@ Respond ONLY with the JSON object. Do not include markdown code blocks.`;
             // Helper to get the current button instance (in case DOM re-rendered)
             const getButton = () => {
                 const currentBtn = document.querySelector(`button[data-msg-index="${index}"]`);
-                return currentBtn || btn; // Fallback to original if not found (though original might be detached)
+                return currentBtn || btn; 
             };
 
             const updateButtonState = (isLoading, isPlaying) => {
@@ -1109,7 +1145,6 @@ Respond ONLY with the JSON object. Do not include markdown code blocks.`;
                 const icon = targetBtn.querySelector('i');
                 if (!icon) return;
 
-                // Check if audio is cached
                 const voiceType = state.volcTtsVoice || 'zh_female_vv_uranus_bigtts';
                 const cacheKey = text + '_' + voiceType;
                 const isCached = state.ttsCache[cacheKey];
@@ -1125,7 +1160,6 @@ Respond ONLY with the JSON object. Do not include markdown code blocks.`;
                     targetBtn.classList.remove('text-gray-400', 'text-green-500', 'hover:text-blue-500', 'hover:text-green-600');
                     targetBtn.classList.add('text-blue-600', 'animate-pulse');
                 } else {
-                    // Restore to idle state - green if cached, gray if not
                     icon.className = 'fas fa-volume-up';
                     targetBtn.disabled = false;
                     targetBtn.classList.remove('text-blue-600', 'animate-pulse');
@@ -1141,54 +1175,69 @@ Respond ONLY with the JSON object. Do not include markdown code blocks.`;
                 }
             };
 
-            // Stop previous audio if playing
-            if (state.currentAudio) {
-                state.currentAudio.pause();
-                state.currentAudio.currentTime = 0;
-                state.currentAudio = null;
-                // We should ideally reset the UI of the previous button, but finding it might be complex if we didn't store it.
-                // A simple global reset or just letting the new click take over is acceptable for this scope.
-                // However, let's try to reset all buttons' state just in case.
-                document.querySelectorAll('button[data-msg-index] i').forEach(i => {
-                    i.className = 'fas fa-volume-up';
-                    i.closest('button').disabled = false;
-                    i.closest('button').classList.add('text-gray-400');
-                    i.closest('button').classList.remove('text-blue-600', 'animate-pulse');
-                });
-            }
+            // Stop previous audio
+            stopCurrentAudio();
+            
+            // Reset all buttons state to ensure UI consistency
+            document.querySelectorAll('button[data-msg-index]').forEach(b => {
+                b.disabled = false;
+                b.classList.remove('text-blue-600', 'animate-pulse');
+                const i = b.querySelector('i');
+                if(i) i.className = 'fas fa-volume-up';
+                
+                // Restore cache color
+                const msgIdx = b.getAttribute('data-msg-index');
+                const messages = state.chatHistory[state.currentRoleId] || [];
+                const msg = messages[msgIdx];
+                if(msg) {
+                    const vt = state.volcTtsVoice || 'zh_female_vv_uranus_bigtts';
+                    const ck = msg.content + '_' + vt;
+                    if(state.ttsCache[ck]) {
+                         b.classList.remove('text-gray-400', 'hover:text-blue-500');
+                         b.classList.add('text-green-500', 'hover:text-green-600');
+                    } else {
+                         b.classList.remove('text-green-500', 'hover:text-green-600');
+                         b.classList.add('text-gray-400', 'hover:text-blue-500');
+                    }
+                }
+            });
 
             const voiceType = state.volcTtsVoice || 'zh_female_vv_uranus_bigtts';
             const cacheKey = text + '_' + voiceType;
 
-            const playAudio = (base64Data) => {
-                const audio = new Audio("data:audio/mp3;base64," + base64Data);
-                state.currentAudio = audio;
-                
-                updateButtonState(false, true);
+            const playAudioData = async (base64Data) => {
+                try {
+                    const arrayBuffer = base64ToArrayBuffer(base64Data);
+                    const audioBuffer = await ctx.decodeAudioData(arrayBuffer);
+                    
+                    stopCurrentAudio(); 
+                    
+                    const source = ctx.createBufferSource();
+                    source.buffer = audioBuffer;
+                    source.connect(ctx.destination);
+                    
+                    state.currentAudio = source;
+                    
+                    updateButtonState(false, true);
 
-                audio.onended = () => {
-                    updateButtonState(false, false);
-                    state.currentAudio = null;
-                };
+                    source.onended = () => {
+                        updateButtonState(false, false);
+                        state.currentAudio = null;
+                    };
 
-                audio.onerror = (e) => {
+                    source.start(0);
+                } catch (e) {
                     console.error('Audio Playback Error:', e);
                     alert('音频播放失败');
                     updateButtonState(false, false);
                     state.currentAudio = null;
-                };
-
-                audio.play().catch(e => {
-                    console.error('Play Promise Error:', e);
-                    // Interactions requirements might block auto-play if not triggered by user, 
-                    // but here it is triggered by click, so it should be fine.
-                });
+                }
             };
 
             // Check cache first
             if (state.ttsCache[cacheKey]) {
                 console.log('Using cached audio');
-                playAudio(state.ttsCache[cacheKey]);
+                playAudioData(state.ttsCache[cacheKey]);
                 return;
             }
 
@@ -1220,7 +1269,7 @@ Respond ONLY with the JSON object. Do not include markdown code blocks.`;
                         targetBtn.title = '播放语音 (已缓存)';
                     }
 
-                    playAudio(data.audio);
+                    playAudioData(data.audio);
                 } else {
                     throw new Error(data.message || '转换失败');
                 }
@@ -1258,10 +1307,7 @@ Respond ONLY with the JSON object. Do not include markdown code blocks.`;
             }
 
             // Stop any currently playing audio
-            if (state.currentAudio) {
-                state.currentAudio.pause();
-                state.currentAudio = null;
-            }
+            stopCurrentAudio();
 
             // Update button state
             const icon = elements.playAllBtn.querySelector('i');
@@ -1331,10 +1377,7 @@ Respond ONLY with the JSON object. Do not include markdown code blocks.`;
             state.isPlayingAll = false;
             state.playAllQueue = [];
 
-            if (state.currentAudio) {
-                state.currentAudio.pause();
-                state.currentAudio = null;
-            }
+            stopCurrentAudio();
 
             // Reset all button states
             document.querySelectorAll('button[data-msg-index]').forEach(btn => {
