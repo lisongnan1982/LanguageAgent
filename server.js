@@ -79,6 +79,19 @@ const IMAGE_MODELS = {
         steps: 7,           // Turbo 模型只需要 7 步
         guidance: 2,        // 低 guidance 效果更好
         scheduler: 'K_EULER'  // 必须指定调度器
+    },
+    'qwen-image-fast': {
+        version: 'prunaai/qwen-image-fast:01b324d214eb4870ff424dc4215c067759c4c01a8751e327a434e2b16054db2f',
+        defaultAspectRatio: '1:1',
+        creativity: 0.62,
+        useAspectRatio: true  // 标记使用 aspect_ratio 而非 width/height
+    },
+    'p-image': {
+        modelEndpoint: 'prunaai/p-image',  // 使用 model endpoint 而非 version
+        defaultAspectRatio: '16:9',
+        promptUpsampling: false,
+        useAspectRatio: true,
+        useModelEndpoint: true  // 标记使用 model endpoint
     }
 };
 
@@ -144,33 +157,70 @@ app.post('/api/proxy-llm', async (req, res) => {
                         }
 
                         // 构建图片生成请求参数
-                        const imageInput = {
-                            seed: Math.floor(Math.random() * 10000),
-                            steps: imageModelConfig.steps,
-                            width: args.width || imageModelConfig.defaultWidth,
-                            height: args.height || imageModelConfig.defaultHeight,
-                            prompt: args.prompt,
-                            disable_safety_checker: true,
-                            negative_prompt: args.negative_prompt || '(deformed iris, deformed pupils, semi-realistic, cgi, 3d, render, sketch, cartoon, drawing, anime:1.4), text, close up, cropped, out of frame, worst quality, low quality, jpeg artifacts, ugly, duplicate, morbid, mutilated, extra fingers, mutated hands, poorly drawn hands, poorly drawn face, mutation, deformed, blurry, dehydrated, bad anatomy, bad proportions, extra limbs, cloned face, disfigured, gross proportions, malformed limbs, missing arms, missing legs, extra arms, extra legs, fused fingers, too many fingers, long neck'
-                        };
+                        let imageInput;
+                        let apiEndpoint;
+                        let requestBody;
 
-                        // 添加模型特定参数
-                        if (imageModelConfig.guidance) {
-                            imageInput.guidance = imageModelConfig.guidance;
-                        }
-                        if (imageModelConfig.scheduler) {
-                            imageInput.scheduler = imageModelConfig.scheduler;
+                        if (imageModelConfig.useAspectRatio) {
+                            // 新模型使用 aspect_ratio 参数
+                            imageInput = {
+                                prompt: args.prompt,
+                                aspect_ratio: args.aspect_ratio || imageModelConfig.defaultAspectRatio
+                            };
+
+                            if (imageModelConfig.creativity !== undefined) {
+                                imageInput.creativity = args.creativity || imageModelConfig.creativity;
+                            }
+                            if (imageModelConfig.promptUpsampling !== undefined) {
+                                imageInput.prompt_upsampling = imageModelConfig.promptUpsampling;
+                            }
+
+                            if (imageModelConfig.useModelEndpoint) {
+                                // p-image 使用 model endpoint
+                                apiEndpoint = `https://api.replicate.com/v1/models/${imageModelConfig.modelEndpoint}/predictions`;
+                                requestBody = { input: imageInput };
+                            } else {
+                                // qwen-image-fast 使用 version endpoint
+                                apiEndpoint = 'https://api.replicate.com/v1/predictions';
+                                requestBody = {
+                                    version: imageModelConfig.version,
+                                    input: imageInput
+                                };
+                            }
+                        } else {
+                            // 传统模型使用 width/height 参数
+                            imageInput = {
+                                seed: Math.floor(Math.random() * 10000),
+                                steps: imageModelConfig.steps,
+                                width: args.width || imageModelConfig.defaultWidth,
+                                height: args.height || imageModelConfig.defaultHeight,
+                                prompt: args.prompt,
+                                disable_safety_checker: true,
+                                negative_prompt: args.negative_prompt || '(deformed iris, deformed pupils, semi-realistic, cgi, 3d, render, sketch, cartoon, drawing, anime:1.4), text, close up, cropped, out of frame, worst quality, low quality, jpeg artifacts, ugly, duplicate, morbid, mutilated, extra fingers, mutated hands, poorly drawn hands, poorly drawn face, mutation, deformed, blurry, dehydrated, bad anatomy, bad proportions, extra limbs, cloned face, disfigured, gross proportions, malformed limbs, missing arms, missing legs, extra arms, extra legs, fused fingers, too many fingers, long neck'
+                            };
+
+                            // 添加模型特定参数
+                            if (imageModelConfig.guidance) {
+                                imageInput.guidance = imageModelConfig.guidance;
+                            }
+                            if (imageModelConfig.scheduler) {
+                                imageInput.scheduler = imageModelConfig.scheduler;
+                            }
+
+                            apiEndpoint = 'https://api.replicate.com/v1/predictions';
+                            requestBody = {
+                                version: imageModelConfig.version,
+                                input: imageInput
+                            };
                         }
 
                         console.log(`使用图片模型: ${replicateModel || 'realistic-vision-v5.1'}`);
+                        console.log(`API 端点: ${apiEndpoint}`);
 
                         // 调用 Replicate API 生成图片
                         const imageResponse = await axios.post(
-                            'https://api.replicate.com/v1/predictions',
-                            {
-                                version: imageModelConfig.version,
-                                input: imageInput
-                            },
+                            apiEndpoint,
+                            requestBody,
                             {
                                 headers: {
                                     'Authorization': `Bearer ${replicateToken}`,
@@ -539,33 +589,70 @@ app.post('/mcp/tools/call', async (req, res) => {
         const mcpModelConfig = IMAGE_MODELS[args.model] || IMAGE_MODELS['realistic-vision-v5.1'];
 
         // 构建图片生成请求参数
-        const mcpImageInput = {
-            seed: Math.floor(Math.random() * 10000),
-            steps: args.steps || mcpModelConfig.steps,
-            width: args.width || mcpModelConfig.defaultWidth,
-            height: args.height || mcpModelConfig.defaultHeight,
-            prompt: args.prompt,
-            disable_safety_checker: true,
-            negative_prompt: args.negative_prompt || '(deformed iris, deformed pupils, semi-realistic, cgi, 3d, render, sketch, cartoon, drawing, anime:1.4), text, close up, cropped, out of frame, worst quality, low quality, jpeg artifacts, ugly, duplicate, morbid, mutilated, extra fingers, mutated hands, poorly drawn hands, poorly drawn face, mutation, deformed, blurry, dehydrated, bad anatomy, bad proportions, extra limbs, cloned face, disfigured, gross proportions, malformed limbs, missing arms, missing legs, extra arms, extra legs, fused fingers, too many fingers, long neck'
-        };
+        let mcpImageInput;
+        let mcpApiEndpoint;
+        let mcpRequestBody;
 
-        // 添加模型特定参数
-        if (mcpModelConfig.guidance) {
-            mcpImageInput.guidance = args.guidance || mcpModelConfig.guidance;
-        }
-        if (mcpModelConfig.scheduler) {
-            mcpImageInput.scheduler = mcpModelConfig.scheduler;
+        if (mcpModelConfig.useAspectRatio) {
+            // 新模型使用 aspect_ratio 参数
+            mcpImageInput = {
+                prompt: args.prompt,
+                aspect_ratio: args.aspect_ratio || mcpModelConfig.defaultAspectRatio
+            };
+
+            if (mcpModelConfig.creativity !== undefined) {
+                mcpImageInput.creativity = args.creativity || mcpModelConfig.creativity;
+            }
+            if (mcpModelConfig.promptUpsampling !== undefined) {
+                mcpImageInput.prompt_upsampling = mcpModelConfig.promptUpsampling;
+            }
+
+            if (mcpModelConfig.useModelEndpoint) {
+                // p-image 使用 model endpoint
+                mcpApiEndpoint = `https://api.replicate.com/v1/models/${mcpModelConfig.modelEndpoint}/predictions`;
+                mcpRequestBody = { input: mcpImageInput };
+            } else {
+                // qwen-image-fast 使用 version endpoint
+                mcpApiEndpoint = 'https://api.replicate.com/v1/predictions';
+                mcpRequestBody = {
+                    version: mcpModelConfig.version,
+                    input: mcpImageInput
+                };
+            }
+        } else {
+            // 传统模型使用 width/height 参数
+            mcpImageInput = {
+                seed: Math.floor(Math.random() * 10000),
+                steps: args.steps || mcpModelConfig.steps,
+                width: args.width || mcpModelConfig.defaultWidth,
+                height: args.height || mcpModelConfig.defaultHeight,
+                prompt: args.prompt,
+                disable_safety_checker: true,
+                negative_prompt: args.negative_prompt || '(deformed iris, deformed pupils, semi-realistic, cgi, 3d, render, sketch, cartoon, drawing, anime:1.4), text, close up, cropped, out of frame, worst quality, low quality, jpeg artifacts, ugly, duplicate, morbid, mutilated, extra fingers, mutated hands, poorly drawn hands, poorly drawn face, mutation, deformed, blurry, dehydrated, bad anatomy, bad proportions, extra limbs, cloned face, disfigured, gross proportions, malformed limbs, missing arms, missing legs, extra arms, extra legs, fused fingers, too many fingers, long neck'
+            };
+
+            // 添加模型特定参数
+            if (mcpModelConfig.guidance) {
+                mcpImageInput.guidance = args.guidance || mcpModelConfig.guidance;
+            }
+            if (mcpModelConfig.scheduler) {
+                mcpImageInput.scheduler = mcpModelConfig.scheduler;
+            }
+
+            mcpApiEndpoint = 'https://api.replicate.com/v1/predictions';
+            mcpRequestBody = {
+                version: mcpModelConfig.version,
+                input: mcpImageInput
+            };
         }
 
         console.log(`MCP 使用图片模型: ${args.model || 'realistic-vision-v5.1'}`);
+        console.log(`MCP API 端点: ${mcpApiEndpoint}`);
 
         // 调用 Replicate API
         const response = await axios.post(
-            'https://api.replicate.com/v1/predictions',
-            {
-                version: mcpModelConfig.version,
-                input: mcpImageInput
-            },
+            mcpApiEndpoint,
+            mcpRequestBody,
             {
                 headers: {
                     'Authorization': `Bearer ${apiToken}`,
@@ -624,7 +711,7 @@ app.post('/mcp/tools/call', async (req, res) => {
 
 // 文生图接口 (Text-to-Image) - 使用 Replicate API
 app.post('/api/text-to-image', async (req, res) => {
-    const { apiToken, prompt, negative_prompt, width, height, num_inference_steps, guidance_scale, model } = req.body;
+    const { apiToken, prompt, negative_prompt, width, height, num_inference_steps, guidance_scale, model, aspect_ratio, creativity } = req.body;
 
     if (!apiToken || !prompt) {
         return res.status(400).json({ success: false, message: '缺少必要参数：apiToken 和 prompt' });
@@ -639,30 +726,68 @@ app.post('/api/text-to-image', async (req, res) => {
         console.log('Prompt:', prompt);
 
         // 构建请求参数
-        const restImageInput = {
-            seed: Math.floor(Math.random() * 10000),
-            steps: num_inference_steps || restModelConfig.steps,
-            width: width || restModelConfig.defaultWidth,
-            height: height || restModelConfig.defaultHeight,
-            prompt: prompt,
-            negative_prompt: negative_prompt || '(deformed iris, deformed pupils, semi-realistic, cgi, 3d, render, sketch, cartoon, drawing, anime:1.4), text, close up, cropped, out of frame, worst quality, low quality, jpeg artifacts, ugly, duplicate, morbid, mutilated, extra fingers, mutated hands, poorly drawn hands, poorly drawn face, mutation, deformed, blurry, dehydrated, bad anatomy, bad proportions, extra limbs, cloned face, disfigured, gross proportions, malformed limbs, missing arms, missing legs, extra arms, extra legs, fused fingers, too many fingers, long neck',
-            disable_safety_checker: true
-        };
+        let restImageInput;
+        let restApiEndpoint;
+        let restRequestBody;
 
-        // 添加模型特定参数
-        if (restModelConfig.guidance) {
-            restImageInput.guidance = guidance_scale || restModelConfig.guidance;
-        }
-        if (restModelConfig.scheduler) {
-            restImageInput.scheduler = restModelConfig.scheduler;
-        }
+        if (restModelConfig.useAspectRatio) {
+            // 新模型使用 aspect_ratio 参数
+            restImageInput = {
+                prompt: prompt,
+                aspect_ratio: aspect_ratio || restModelConfig.defaultAspectRatio
+            };
 
-        const response = await axios.post(
-            'https://api.replicate.com/v1/predictions',
-            {
+            if (restModelConfig.creativity !== undefined) {
+                restImageInput.creativity = creativity || restModelConfig.creativity;
+            }
+            if (restModelConfig.promptUpsampling !== undefined) {
+                restImageInput.prompt_upsampling = restModelConfig.promptUpsampling;
+            }
+
+            if (restModelConfig.useModelEndpoint) {
+                // p-image 使用 model endpoint
+                restApiEndpoint = `https://api.replicate.com/v1/models/${restModelConfig.modelEndpoint}/predictions`;
+                restRequestBody = { input: restImageInput };
+            } else {
+                // qwen-image-fast 使用 version endpoint
+                restApiEndpoint = 'https://api.replicate.com/v1/predictions';
+                restRequestBody = {
+                    version: restModelConfig.version,
+                    input: restImageInput
+                };
+            }
+        } else {
+            // 传统模型使用 width/height 参数
+            restImageInput = {
+                seed: Math.floor(Math.random() * 10000),
+                steps: num_inference_steps || restModelConfig.steps,
+                width: width || restModelConfig.defaultWidth,
+                height: height || restModelConfig.defaultHeight,
+                prompt: prompt,
+                negative_prompt: negative_prompt || '(deformed iris, deformed pupils, semi-realistic, cgi, 3d, render, sketch, cartoon, drawing, anime:1.4), text, close up, cropped, out of frame, worst quality, low quality, jpeg artifacts, ugly, duplicate, morbid, mutilated, extra fingers, mutated hands, poorly drawn hands, poorly drawn face, mutation, deformed, blurry, dehydrated, bad anatomy, bad proportions, extra limbs, cloned face, disfigured, gross proportions, malformed limbs, missing arms, missing legs, extra arms, extra legs, fused fingers, too many fingers, long neck',
+                disable_safety_checker: true
+            };
+
+            // 添加模型特定参数
+            if (restModelConfig.guidance) {
+                restImageInput.guidance = guidance_scale || restModelConfig.guidance;
+            }
+            if (restModelConfig.scheduler) {
+                restImageInput.scheduler = restModelConfig.scheduler;
+            }
+
+            restApiEndpoint = 'https://api.replicate.com/v1/predictions';
+            restRequestBody = {
                 version: restModelConfig.version,
                 input: restImageInput
-            },
+            };
+        }
+
+        console.log(`API 端点: ${restApiEndpoint}`);
+
+        const response = await axios.post(
+            restApiEndpoint,
+            restRequestBody,
             {
                 headers: {
                     'Authorization': `Bearer ${apiToken}`,
