@@ -659,6 +659,22 @@
             elements.aiGenerateBtn.onclick = generateRoleWithAI;
             elements.autoReplyBtn.onclick = autoReply;
 
+            // Textarea auto-resize and Enter key handling
+            const adjustTextareaHeight = () => {
+                elements.userInput.style.height = 'auto';
+                elements.userInput.style.height = (elements.userInput.scrollHeight) + 'px';
+            };
+            elements.userInput.addEventListener('input', adjustTextareaHeight);
+            
+            elements.userInput.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    if (!elements.sendBtn.disabled) {
+                        sendMessage();
+                    }
+                }
+            });
+
             elements.chatForm.onsubmit = (e) => {
                 e.preventDefault();
                 sendMessage();
@@ -733,6 +749,7 @@
                     const data = await resp.json();
                     if (data.text) {
                         elements.userInput.value = data.text;
+                        elements.userInput.dispatchEvent(new Event('input'));
                     } else {
                         alert('识别失败: ' + (data.message || '未知错误'));
                     }
@@ -1548,6 +1565,7 @@ The response must be:
                 const data = await response.json();
                 if (data.choices && data.choices[0]) {
                     elements.userInput.value = data.choices[0].message.content.trim().replace(/^["']|["']$/g, '');
+                    elements.userInput.dispatchEvent(new Event('input'));
                 }
             } catch (error) {
                 console.error('Auto Reply Error:', error);
@@ -1616,6 +1634,7 @@ The response must be:
             // Add user message
             state.chatHistory[state.currentRoleId].push({ role: 'user', content });
             elements.userInput.value = '';
+            elements.userInput.style.height = 'auto';
             renderMessages();
 
             // Prepare API call with Context Isolation
