@@ -395,40 +395,36 @@ function constructHeader(msgType, msgFlags, serialization, compression) {
 function constructFullRequest(seq, payload) {
     const header = constructHeader(
         MESSAGE_TYPE.FULL_CLIENT_REQUEST,
-        MESSAGE_FLAGS.POS_SEQUENCE,
+        MESSAGE_FLAGS.NO_SEQUENCE,
         SERIALIZATION.JSON,
         COMPRESSION.GZIP
     );
     const payloadBytes = Buffer.from(JSON.stringify(payload));
     const compressedPayload = zlib.gzipSync(payloadBytes);
     
-    const seqBuf = Buffer.alloc(4);
-    seqBuf.writeInt32BE(seq);
+    // NO sequence buffer for NO_SEQUENCE flag (matches Python demo)
     
     const sizeBuf = Buffer.alloc(4);
     sizeBuf.writeUInt32BE(compressedPayload.length);
     
-    return Buffer.concat([header, seqBuf, sizeBuf, compressedPayload]);
+    return Buffer.concat([header, sizeBuf, compressedPayload]);
 }
 
 function constructAudioRequest(seq, audioData, isLast) {
     const header = constructHeader(
         MESSAGE_TYPE.AUDIO_ONLY_REQUEST,
-        isLast ? MESSAGE_FLAGS.NEG_WITH_SEQUENCE : MESSAGE_FLAGS.POS_SEQUENCE,
-        SERIALIZATION.NO,
+        isLast ? MESSAGE_FLAGS.NEG_SEQUENCE : MESSAGE_FLAGS.NO_SEQUENCE,
+        SERIALIZATION.JSON, // Python demo uses JSON serialization flag even for audio
         COMPRESSION.GZIP
     );
     
-    // Last package uses negative sequence in demonstration code
-    const actualSeq = isLast ? -seq : seq;
-    const seqBuf = Buffer.alloc(4);
-    seqBuf.writeInt32BE(actualSeq);
+    // NO sequence buffer for NO_SEQUENCE or NEG_SEQUENCE flag (matches Python demo)
     
     const compressedAudio = zlib.gzipSync(audioData);
     const sizeBuf = Buffer.alloc(4);
     sizeBuf.writeUInt32BE(compressedAudio.length);
     
-    return Buffer.concat([header, seqBuf, sizeBuf, compressedAudio]);
+    return Buffer.concat([header, sizeBuf, compressedAudio]);
 }
 
 function parseResponse(data) {
@@ -524,8 +520,8 @@ app.post('/api/asr', upload.single('audio'), async (req, res) => {
             targetResource = 'volc.bigasr.auc';
         }
         
-        // Use streaming endpoint (sauc)
-        const wsUrl = 'wss://openspeech.bytedance.com/api/v3/sauc/bigmodel';
+        // Use streaming endpoint (v2 with query params)
+        const wsUrl = `wss://openspeech.bytedance.com/api/v2/asr?cluster=${targetResource}&appid=${appid.trim()}`;
         const reqId = crypto.randomUUID();
         
         // Correct headers according to python demo
@@ -595,6 +591,8 @@ app.post('/api/asr', upload.single('audio'), async (req, res) => {
 
                 if (response.msgType === MESSAGE_TYPE.SERVER_ERROR_RESPONSE) {
                     console.error('ASR Server Error:', response.errorCode);
+                    // Don't reject immediately for 1000/success codes if they appear in error frame (rare)
+                    // But usually error frame is error.
                     reject(new Error(`ASR Server Error Code: ${response.errorCode}`));
                 } else if (response.msgType === MESSAGE_TYPE.FULL_SERVER_RESPONSE) {
                     const result = response.payloadMsg;
@@ -656,7 +654,8 @@ app.post('/api/asr', upload.single('audio'), async (req, res) => {
         if (finalResultText) {
             res.json({ success: true, text: finalResultText });
         } else {
-            res.status(500).json({ success: false, message: '未获取到识别结果' });
+            // If no text found (e.g. silent audio), but no error, return generic message
+            res.status(200).json({ success: true, text: finalResultText || "(未识别到有效语音)" });
         }
 
     } catch (error) {
