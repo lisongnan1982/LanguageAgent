@@ -298,7 +298,7 @@ app.post('/api/proxy-llm', async (req, res) => {
     }
 });
 
-// 火山引擎语音合成接口 (TTS)
+// 火山引擎语音合成接口 (TTS) - 普通模式 (v1 API)
 app.post('/api/tts', async (req, res) => {
     let { text, appid, token, cluster, voice_type } = req.body;
     if (!text || !appid || !token) {
@@ -331,7 +331,7 @@ app.post('/api/tts', async (req, res) => {
             }
         };
 
-        console.log('Submitting TTS request to Volcengine...');
+        console.log('Submitting TTS request to Volcengine (v1)...');
         console.log('AppID:', appid);
         console.log('Cluster:', cluster || 'volcano_tts');
         console.log('Voice Type:', voice_type || 'zh_female_vv_uranus_bigtts');
@@ -356,9 +356,132 @@ app.post('/api/tts', async (req, res) => {
     } catch (error) {
         const errorDetail = error.response?.data || error.message;
         console.error('TTS Error:', errorDetail);
-        res.status(500).json({ 
-            success: false, 
+        res.status(500).json({
+            success: false,
             message: typeof errorDetail === 'string' ? errorDetail : (errorDetail.message || 'TTS 请求失败'),
+            detail: errorDetail
+        });
+    }
+});
+
+// 火山引擎语音合成接口 (TTS) - 单向流式模式 (v3 API)
+app.post('/api/tts-stream', async (req, res) => {
+    let { text, appid, access_key, resource_id, voice_type } = req.body;
+    if (!text || !appid || !access_key || !resource_id) {
+        return res.status(400).json({ success: false, message: '缺少参数: 需要 appid, access_key, resource_id' });
+    }
+
+    // 去除可能存在的空格
+    appid = appid.trim();
+    access_key = access_key.trim();
+    resource_id = resource_id.trim();
+    if (voice_type) voice_type = voice_type.trim();
+
+    try {
+        const tts_url = 'https://openspeech.bytedance.com/api/v3/tts/unidirectional';
+        const requestData = {
+            user: { uid: 'roleplay_user' },
+            req_params: {
+                text: text,
+                speaker: voice_type || 'zh_female_cancan_mars_bigtts',
+                audio_params: {
+                    format: 'mp3',
+                    sample_rate: 24000,
+                    enable_timestamp: false
+                },
+                additions: JSON.stringify({
+                    explicit_language: 'zh',
+                    disable_markdown_filter: true
+                })
+            }
+        };
+
+        console.log('Submitting TTS stream request to Volcengine (v3)...');
+        console.log('AppID:', appid);
+        console.log('Resource ID:', resource_id);
+        console.log('Voice Type:', voice_type || 'zh_female_cancan_mars_bigtts');
+
+        const response = await axios.post(tts_url, requestData, {
+            headers: {
+                'X-Api-App-Id': appid,
+                'X-Api-Access-Key': access_key,
+                'X-Api-Resource-Id': resource_id,
+                'Content-Type': 'application/json',
+                'Connection': 'keep-alive'
+            },
+            responseType: 'stream'
+        });
+
+        console.log('TTS Stream Response Status:', response.status);
+        console.log('TTS Stream X-Tt-Logid:', response.headers['x-tt-logid']);
+
+        // 收集所有音频数据
+        const audioChunks = [];
+        let lineBuffer = '';
+
+        response.data.on('data', (chunk) => {
+            lineBuffer += chunk.toString('utf-8');
+            const lines = lineBuffer.split('\n');
+            lineBuffer = lines.pop(); // 保留最后一个不完整的行
+
+            for (const line of lines) {
+                if (!line.trim()) continue;
+                try {
+                    const data = JSON.parse(line);
+                    if (data.code === 0 && data.data) {
+                        // 解码 base64 音频数据
+                        const audioBuffer = Buffer.from(data.data, 'base64');
+                        audioChunks.push(audioBuffer);
+                    } else if (data.code === 20000000) {
+                        // 合成完成
+                        console.log('TTS Stream completed');
+                        if (data.usage) {
+                            console.log('TTS Usage:', data.usage);
+                        }
+                    } else if (data.code > 0 && data.code !== 20000000) {
+                        console.error('TTS Stream error:', data);
+                    }
+                } catch (e) {
+                    console.error('Parse line error:', e.message, 'Line:', line.substring(0, 100));
+                }
+            }
+        });
+
+        response.data.on('end', () => {
+            // 处理最后一行
+            if (lineBuffer.trim()) {
+                try {
+                    const data = JSON.parse(lineBuffer);
+                    if (data.code === 0 && data.data) {
+                        const audioBuffer = Buffer.from(data.data, 'base64');
+                        audioChunks.push(audioBuffer);
+                    }
+                } catch (e) {
+                    // ignore
+                }
+            }
+
+            if (audioChunks.length > 0) {
+                const fullAudio = Buffer.concat(audioChunks);
+                const base64Audio = fullAudio.toString('base64');
+                console.log(`TTS Stream audio size: ${(fullAudio.length / 1024).toFixed(2)} KB`);
+                res.json({ success: true, audio: base64Audio });
+            } else {
+                res.status(500).json({ success: false, message: '未收到音频数据' });
+            }
+        });
+
+        response.data.on('error', (err) => {
+            console.error('TTS Stream error:', err);
+            res.status(500).json({ success: false, message: err.message });
+        });
+
+    } catch (error) {
+        const errorDetail = error.response?.data || error.message;
+        console.error('TTS Stream Error:', errorDetail);
+        res.status(500).json({
+            success: false,
+            message: typeof errorDetail === 'string' ? errorDetail : (errorDetail.message || 'TTS 流式请求失败'),
             detail: errorDetail
         });
     }

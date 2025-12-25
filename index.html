@@ -229,15 +229,30 @@
                 <div class="space-y-3">
                     <h3 class="text-sm font-bold text-gray-800">火山引擎语音合成设置 (TTS)</h3>
                     <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">TTS 模式</label>
+                        <select id="volcTtsMode"
+                                class="w-full px-4 py-3 md:py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-base">
+                            <option value="normal">普通模式 (v1 API)</option>
+                            <option value="stream">单向流式 (v3 API)</option>
+                        </select>
+                        <p class="text-[10px] text-gray-400 mt-1">普通模式使用 Access Token，流式模式使用 Access Key</p>
+                    </div>
+                    <div>
                         <label class="block text-sm font-medium text-gray-700 mb-1">AppID</label>
                         <input type="text" id="volcAppId" placeholder="火山引擎 AppID"
                                class="w-full px-4 py-3 md:py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-base">
                     </div>
-                    <div>
-                        <label class="block text-sm font-medium text-gray-700 mb-1">Access Token (TTS)</label>
+                    <div id="ttsNormalAuthContainer">
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Access Token (普通模式)</label>
                         <input type="password" id="volcTtsToken" placeholder="火山引擎 Access Token"
                                class="w-full px-4 py-3 md:py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-base">
                         <p class="text-[10px] text-gray-400 mt-1">注：TTS 通常使用 Access Token，与 ASR 的 Access Key 不同</p>
+                    </div>
+                    <div id="ttsStreamAuthContainer" class="hidden">
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Access Key (流式模式)</label>
+                        <input type="password" id="volcTtsAccessKey" placeholder="火山引擎 Access Key"
+                               class="w-full px-4 py-3 md:py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-base">
+                        <p class="text-[10px] text-gray-400 mt-1">流式模式需要使用 Access Key 认证</p>
                     </div>
                     <div>
                         <label class="block text-sm font-medium text-gray-700 mb-1">TTS Resource ID (资源标识)</label>
@@ -351,6 +366,8 @@
             volcAppId: localStorage.getItem('volc_appid') || '',
             volcToken: localStorage.getItem('volc_token') || '',
             volcTtsToken: localStorage.getItem('volc_tts_token') || '',
+            volcTtsMode: localStorage.getItem('volc_tts_mode') || 'normal',
+            volcTtsAccessKey: localStorage.getItem('volc_tts_access_key') || '',
             volcCluster: localStorage.getItem('volc_cluster') || 'volc.bigasr.auc',
             volcTtsCluster: localStorage.getItem('volc_tts_cluster') || 'volcano_tts',
             volcTtsVoice: localStorage.getItem('volc_tts_voice') || 'zh_female_vv_uranus_bigtts',
@@ -480,6 +497,10 @@
             volcAppId: document.getElementById('volcAppId'),
             volcToken: document.getElementById('volcToken'),
             volcTtsToken: document.getElementById('volcTtsToken'),
+            volcTtsMode: document.getElementById('volcTtsMode'),
+            volcTtsAccessKey: document.getElementById('volcTtsAccessKey'),
+            ttsNormalAuthContainer: document.getElementById('ttsNormalAuthContainer'),
+            ttsStreamAuthContainer: document.getElementById('ttsStreamAuthContainer'),
             volcCluster: document.getElementById('volcCluster'),
             volcTtsCluster: document.getElementById('volcTtsCluster'),
             volcTtsVoice: document.getElementById('volcTtsVoice'),
@@ -529,6 +550,9 @@
             elements.volcAppId.value = state.volcAppId;
             elements.volcToken.value = state.volcToken;
             elements.volcTtsToken.value = state.volcTtsToken;
+            elements.volcTtsMode.value = state.volcTtsMode;
+            elements.volcTtsAccessKey.value = state.volcTtsAccessKey;
+            updateTtsModeUI();
             elements.volcCluster.value = state.volcCluster;
             elements.volcTtsCluster.value = state.volcTtsCluster;
             elements.volcTtsVoice.value = state.volcTtsVoice;
@@ -541,6 +565,17 @@
                 fetchModels();
             }
             setupEventListeners();
+        }
+
+        // 更新 TTS 模式 UI
+        function updateTtsModeUI() {
+            if (state.volcTtsMode === 'stream') {
+                elements.ttsNormalAuthContainer.classList.add('hidden');
+                elements.ttsStreamAuthContainer.classList.remove('hidden');
+            } else {
+                elements.ttsNormalAuthContainer.classList.remove('hidden');
+                elements.ttsStreamAuthContainer.classList.add('hidden');
+            }
         }
 
         // 移动端输入框固定在底部
@@ -599,6 +634,8 @@
                 state.volcAppId = elements.volcAppId.value;
                 state.volcToken = elements.volcToken.value;
                 state.volcTtsToken = elements.volcTtsToken.value;
+                state.volcTtsMode = elements.volcTtsMode.value;
+                state.volcTtsAccessKey = elements.volcTtsAccessKey.value;
                 state.volcCluster = elements.volcCluster.value;
                 state.volcTtsCluster = elements.volcTtsCluster.value;
                 state.volcTtsVoice = elements.volcTtsVoice.value;
@@ -606,12 +643,14 @@
                 state.autoTtsThreshold = parseInt(elements.autoTtsThreshold.value) || 100;
                 state.replicateToken = elements.replicateToken.value;
                 state.replicateModel = elements.replicateModel.value;
-                
+
                 localStorage.setItem('openrouter_api_key', state.apiKey);
                 localStorage.setItem('selected_model', state.selectedModel);
                 localStorage.setItem('volc_appid', state.volcAppId);
                 localStorage.setItem('volc_token', state.volcToken);
                 localStorage.setItem('volc_tts_token', state.volcTtsToken);
+                localStorage.setItem('volc_tts_mode', state.volcTtsMode);
+                localStorage.setItem('volc_tts_access_key', state.volcTtsAccessKey);
                 localStorage.setItem('volc_cluster', state.volcCluster);
                 localStorage.setItem('volc_tts_cluster', state.volcTtsCluster);
                 localStorage.setItem('volc_tts_voice', state.volcTtsVoice);
@@ -619,9 +658,15 @@
                 localStorage.setItem('auto_tts_threshold', state.autoTtsThreshold);
                 localStorage.setItem('replicate_token', state.replicateToken);
                 localStorage.setItem('replicate_model', state.replicateModel);
-                
+
                 elements.settingsModal.classList.add('hidden');
                 checkInputs();
+            };
+
+            // TTS 模式切换事件
+            elements.volcTtsMode.onchange = () => {
+                state.volcTtsMode = elements.volcTtsMode.value;
+                updateTtsModeUI();
             };
 
             elements.autoTtsEnabled.onchange = () => {
@@ -1236,9 +1281,17 @@ Respond ONLY with the JSON object. Do not include markdown code blocks.`;
         }
 
         async function playTts(ignoredText, btn, index) {
-            if (!state.volcAppId || !state.volcTtsToken) {
-                alert('请先在设置中配置火山引擎 TTS 参数 (AppID 和 Access Token)');
-                return;
+            // 根据 TTS 模式检查所需参数
+            if (state.volcTtsMode === 'stream') {
+                if (!state.volcAppId || !state.volcTtsAccessKey || !state.volcTtsCluster) {
+                    alert('请先在设置中配置火山引擎 TTS 参数 (AppID, Access Key 和 Resource ID)');
+                    return;
+                }
+            } else {
+                if (!state.volcAppId || !state.volcTtsToken) {
+                    alert('请先在设置中配置火山引擎 TTS 参数 (AppID 和 Access Token)');
+                    return;
+                }
             }
 
             // Get authoritative text from state to ensure cache key consistency
@@ -1382,17 +1435,35 @@ Respond ONLY with the JSON object. Do not include markdown code blocks.`;
 
             try {
                 const cleanedText = cleanTextForTts(text).substring(0, 1000); // 清理并限制长度
-                const response = await fetch('/api/tts', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        text: cleanedText,
-                        appid: state.volcAppId,
-                        token: state.volcTtsToken,
-                        cluster: state.volcTtsCluster,
-                        voice_type: voiceType
-                    })
-                });
+                let response;
+
+                if (state.volcTtsMode === 'stream') {
+                    // 单向流式模式 (v3 API)
+                    response = await fetch('/api/tts-stream', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            text: cleanedText,
+                            appid: state.volcAppId,
+                            access_key: state.volcTtsAccessKey,
+                            resource_id: state.volcTtsCluster,
+                            voice_type: voiceType
+                        })
+                    });
+                } else {
+                    // 普通模式 (v1 API)
+                    response = await fetch('/api/tts', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            text: cleanedText,
+                            appid: state.volcAppId,
+                            token: state.volcTtsToken,
+                            cluster: state.volcTtsCluster,
+                            voice_type: voiceType
+                        })
+                    });
+                }
 
                 const data = await response.json();
                 if (data.success && data.audio) {
