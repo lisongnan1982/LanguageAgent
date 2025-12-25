@@ -504,9 +504,11 @@ function convertToPcm(inputPath) {
 }
 
 // 火山引擎语音识别接口 (ASR) - Streaming WebSocket Implementation
+// 按照官方 Python 示例 (streaming_asr_demo.py) 实现
 app.post('/api/asr', upload.single('audio'), async (req, res) => {
     const { appid, token, cluster } = req.body;
     const audioFile = req.file;
+    const SUCCESS_CODE = 1000;
 
     if (!audioFile || !appid || !token) {
         return res.status(400).json({ success: false, message: '缺少参数' });
@@ -520,24 +522,47 @@ app.post('/api/asr', upload.single('audio'), async (req, res) => {
         console.log('Audio converted. Size:', pcmBuffer.length);
 
         // 2. Setup WebSocket Connection
-        // 兼容旧的 cluster 标识，如果为 volc_auc_common 则自动转换为 volc.bigasr.auc
-        // Default to 'volcengine_streaming_common' which is verified to work with v2
         let targetResource = cluster || 'volcengine_streaming_common';
         if (targetResource === 'volc_auc_common') {
             targetResource = 'volcengine_streaming_common';
         }
-        
-        // Use streaming endpoint (v2 with query params)
-        const wsUrl = `wss://openspeech.bytedance.com/api/v2/asr?cluster=${targetResource}&appid=${appid.trim()}`;
+
+        const wsUrl = `wss://openspeech.bytedance.com/api/v2/asr`;
         const reqId = crypto.randomUUID();
-        
-        // Correct headers according to python demo
+
         const headers = {
             "Authorization": `Bearer; ${token.trim()}`
         };
 
         console.log('Connecting to ASR WebSocket:', wsUrl);
         ws = new WebSocket(wsUrl, { headers });
+
+        // 辅助函数：等待并解析一条消息
+        function waitForMessage(ws, timeoutMs = 10000) {
+            return new Promise((resolve, reject) => {
+                const timeout = setTimeout(() => {
+                    reject(new Error('等待服务器响应超时'));
+                }, timeoutMs);
+
+                const onMessage = (data) => {
+                    clearTimeout(timeout);
+                    ws.off('message', onMessage);
+                    ws.off('error', onError);
+                    const response = parseResponse(data);
+                    resolve(response);
+                };
+
+                const onError = (err) => {
+                    clearTimeout(timeout);
+                    ws.off('message', onMessage);
+                    ws.off('error', onError);
+                    reject(err);
+                };
+
+                ws.on('message', onMessage);
+                ws.on('error', onError);
+            });
+        }
 
         await new Promise((resolve, reject) => {
             ws.on('open', resolve);
@@ -549,15 +574,14 @@ app.post('/api/asr', upload.single('audio'), async (req, res) => {
         console.log('WebSocket Connected');
 
         // 3. Send Full Client Request
-        let seq = 1;
         const requestPayload = {
             app: {
                 appid: appid.trim(),
                 cluster: targetResource,
                 token: token.trim()
             },
-            user: { 
-                uid: "roleplay_chat_user" 
+            user: {
+                uid: "roleplay_chat_user"
             },
             request: {
                 reqid: reqId,
@@ -578,90 +602,74 @@ app.post('/api/asr', upload.single('audio'), async (req, res) => {
             }
         };
 
-        const fullRequest = constructFullRequest(seq++, requestPayload);
+        const fullRequest = constructFullRequest(1, requestPayload);
         ws.send(fullRequest);
         console.log('Sent Full Request');
 
+        // 等待 Full Request 的响应（关键！Python 示例这样做）
+        const fullResponse = await waitForMessage(ws);
+        console.log('Full Request Response:', JSON.stringify(fullResponse?.payloadMsg));
+
+        if (fullResponse?.payloadMsg?.code !== SUCCESS_CODE) {
+            throw new Error(`Full Request failed: code=${fullResponse?.payloadMsg?.code}, message=${fullResponse?.payloadMsg?.message}`);
+        }
+
         // 4. Send Audio Chunks
-        // Using Raw PCM, no header to skip
-        const CHUNK_SIZE = 16000 * 2 * 0.2; // 200ms chunks
-        let offset = 0; 
+        const CHUNK_SIZE = 16000 * 2 * 0.1; // 100ms chunks (matches Python demo seg_duration concept)
+        let offset = 0;
         let finalResultText = '';
-        let completed = false;
+        let seq = 1;
 
-        // Setup listener for results
-        const processingPromise = new Promise((resolve, reject) => {
-            ws.on('message', (data) => {
-                const response = parseResponse(data);
-                if (!response) return;
-
-                if (response.msgType === MESSAGE_TYPE.SERVER_ERROR_RESPONSE) {
-                    console.error('ASR Server Error:', response.errorCode);
-                    // Don't reject immediately for 1000/success codes if they appear in error frame (rare)
-                    // But usually error frame is error.
-                    reject(new Error(`ASR Server Error Code: ${response.errorCode}`));
-                } else if (response.msgType === MESSAGE_TYPE.FULL_SERVER_RESPONSE) {
-                    const result = response.payloadMsg;
-                    if (result) {
-                        // Check if final result
-                        // In streaming, we might get partial results, but for this file-upload simulation,
-                        // we wait for the final one or accumulate.
-                        // The demo prints "Received response".
-                        // Usually we look for 'result.text'.
-                        if (result.result) {
-                             // Assuming last message contains full text or we just take the last update
-                             finalResultText = result.result.text;
-                        }
-                    }
-                }
-            });
-            
-            ws.on('close', () => {
-                console.log('WebSocket Closed');
-                resolve();
-            });
-            
-            ws.on('error', (err) => {
-                reject(err);
-            });
-        });
-
-        // Streaming loop
+        // 切分音频数据
+        const chunks = [];
         while (offset < pcmBuffer.length) {
             const end = Math.min(offset + CHUNK_SIZE, pcmBuffer.length);
-            const chunk = pcmBuffer.subarray(offset, end);
-            const isLast = end >= pcmBuffer.length;
-            
+            chunks.push(pcmBuffer.subarray(offset, end));
+            offset += CHUNK_SIZE;
+        }
+
+        // 发送每个音频块并等待响应（按照 Python 示例流程）
+        for (let i = 0; i < chunks.length; i++) {
+            const chunk = chunks[i];
+            const isLast = (i === chunks.length - 1);
+
             const audioRequest = constructAudioRequest(seq++, chunk, isLast);
             ws.send(audioRequest);
-            
-            offset += CHUNK_SIZE;
-            // Slight delay to simulate stream? Not strictly necessary for file upload but good for stability
-            await new Promise(r => setTimeout(r, 20)); 
-        }
-        console.log('Sent all audio chunks');
 
-        // Wait for connection close or timeout?
-        // Streaming ASR usually sends result then closes, or we close.
-        // But since we sent "isLast", server should process and finish.
-        // We need to wait a bit for final response.
-        
-        // Wait for a few seconds max for results, then close if not closed
-        const timeoutPromise = new Promise(r => setTimeout(r, 5000));
-        await Promise.race([processingPromise, timeoutPromise]);
-        
+            // 等待每个音频包的响应
+            const audioResponse = await waitForMessage(ws);
+
+            if (audioResponse?.msgType === MESSAGE_TYPE.SERVER_ERROR_RESPONSE) {
+                console.error('ASR Server Error:', audioResponse.errorCode, audioResponse.payloadMsg);
+                throw new Error(`ASR Server Error: ${audioResponse.errorCode}`);
+            }
+
+            if (audioResponse?.payloadMsg) {
+                const result = audioResponse.payloadMsg;
+                console.log(`Audio chunk ${i + 1}/${chunks.length} response: code=${result.code}`);
+
+                if (result.code !== SUCCESS_CODE) {
+                    throw new Error(`Audio chunk failed: code=${result.code}, message=${result.message}`);
+                }
+
+                // 更新最终结果
+                if (result.result && result.result.text) {
+                    finalResultText = result.result.text;
+                }
+            }
+        }
+
+        console.log('Sent all audio chunks');
         ws.close();
 
         if (fs.existsSync(audioFile.path)) fs.unlinkSync(audioFile.path);
 
-        // Fallback: if text is empty, maybe try to check if we got anything
         console.log('ASR Result:', finalResultText);
-        
+
         if (finalResultText) {
             res.json({ success: true, text: finalResultText });
         } else {
-            // If no text found (e.g. silent audio), but no error, return generic message
-            res.status(200).json({ success: true, text: finalResultText || "(未识别到有效语音)" });
+            res.status(200).json({ success: true, text: "(未识别到有效语音)" });
         }
 
     } catch (error) {
@@ -670,11 +678,11 @@ app.post('/api/asr', upload.single('audio'), async (req, res) => {
             try { ws.close(); } catch(e) {}
         }
         if (audioFile && fs.existsSync(audioFile.path)) fs.unlinkSync(audioFile.path);
-        
-        res.status(500).json({ 
-            success: false, 
-            message: '语音识别失败', 
-            detail: error.message 
+
+        res.status(500).json({
+            success: false,
+            message: '语音识别失败',
+            detail: error.message
         });
     }
 });
