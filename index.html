@@ -963,7 +963,7 @@
             elements.aiGenerateBtn.disabled = true;
             elements.aiGenerateBtn.innerHTML = '<i class="fas fa-spinner animate-spin"></i> 生成中...';
 
-            const systemPrompt = `You are an expert RPG world builder and character designer. 
+            const systemPrompt = `You are an expert RPG world builder and character designer.
 Your task is to take a simple concept and expand it into a rich, multi-dimensional role-playing scenario.
 The scenario should include:
 1. A compelling character name.
@@ -978,7 +978,7 @@ The scenario should include:
 Return the result in JSON format with the following fields:
 - name: The character's name
 - desc: A short, catchy description (max 30 chars)
-- prompt: The full, detailed system prompt in Chinese.
+- prompt: The full, detailed system prompt in Chinese. IMPORTANT: The prompt must instruct the character to respond in plain text only, without any markdown formatting (no **bold**, *italic*, # headings, - lists, or code blocks).
 - icon: A single emoji that represents the character.
 
 Respond ONLY with the JSON object. Do not include markdown code blocks.`;
@@ -1193,6 +1193,48 @@ Respond ONLY with the JSON object. Do not include markdown code blocks.`;
             elements.chatMessages.scrollTop = elements.chatMessages.scrollHeight;
         }
 
+        // 清理文本以适合 TTS 朗读
+        function cleanTextForTts(text) {
+            return text
+                // 移除 emoji 表情符号
+                .replace(/[\u{1F600}-\u{1F64F}]/gu, '') // 表情符号
+                .replace(/[\u{1F300}-\u{1F5FF}]/gu, '') // 杂项符号和象形文字
+                .replace(/[\u{1F680}-\u{1F6FF}]/gu, '') // 交通和地图符号
+                .replace(/[\u{1F1E0}-\u{1F1FF}]/gu, '') // 旗帜
+                .replace(/[\u{2600}-\u{26FF}]/gu, '')   // 杂项符号
+                .replace(/[\u{2700}-\u{27BF}]/gu, '')   // 装饰符号
+                .replace(/[\u{1F900}-\u{1F9FF}]/gu, '') // 补充符号和象形文字
+                .replace(/[\u{1FA00}-\u{1FA6F}]/gu, '') // 棋类符号
+                .replace(/[\u{1FA70}-\u{1FAFF}]/gu, '') // 符号和象形文字扩展A
+                .replace(/[\u{231A}-\u{231B}]/gu, '')   // 手表、沙漏
+                .replace(/[\u{23E9}-\u{23F3}]/gu, '')   // 媒体控制符号
+                .replace(/[\u{23F8}-\u{23FA}]/gu, '')   // 媒体控制符号
+                .replace(/[\u{25AA}-\u{25AB}]/gu, '')   // 方块
+                .replace(/[\u{25B6}]/gu, '')            // 播放按钮
+                .replace(/[\u{25C0}]/gu, '')            // 倒退按钮
+                .replace(/[\u{25FB}-\u{25FE}]/gu, '')   // 方块
+                .replace(/[\u{2934}-\u{2935}]/gu, '')   // 箭头
+                .replace(/[\u{2B05}-\u{2B07}]/gu, '')   // 箭头
+                .replace(/[\u{2B1B}-\u{2B1C}]/gu, '')   // 方块
+                .replace(/[\u{2B50}]/gu, '')            // 星星
+                .replace(/[\u{2B55}]/gu, '')            // 圆圈
+                .replace(/[\u{3030}]/gu, '')            // 波浪线
+                .replace(/[\u{303D}]/gu, '')            // 部分交替标记
+                .replace(/[\u{3297}]/gu, '')            // 日文"祝"
+                .replace(/[\u{3299}]/gu, '')            // 日文"秘"
+                // 移除 markdown 格式残留
+                .replace(/\*\*/g, '')                   // 粗体标记
+                .replace(/\*/g, '')                     // 斜体标记
+                .replace(/#{1,6}\s*/g, '')              // 标题标记
+                .replace(/```[\s\S]*?```/g, '')         // 代码块
+                .replace(/`([^`]+)`/g, '$1')            // 行内代码
+                .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1') // 链接，保留文字
+                // 清理多余空白
+                .replace(/\n{3,}/g, '\n\n')             // 多个换行变成两个
+                .replace(/\s{2,}/g, ' ')                // 多个空格变成一个
+                .trim();
+        }
+
         async function playTts(ignoredText, btn, index) {
             if (!state.volcAppId || !state.volcTtsToken) {
                 alert('请先在设置中配置火山引擎 TTS 参数 (AppID 和 Access Token)');
@@ -1339,11 +1381,12 @@ Respond ONLY with the JSON object. Do not include markdown code blocks.`;
             updateButtonState(true, false);
 
             try {
+                const cleanedText = cleanTextForTts(text).substring(0, 1000); // 清理并限制长度
                 const response = await fetch('/api/tts', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
-                        text: text.substring(0, 1500), // 限制长度
+                        text: cleanedText,
                         appid: state.volcAppId,
                         token: state.volcTtsToken,
                         cluster: state.volcTtsCluster,
@@ -1638,8 +1681,9 @@ The response must be:
             renderMessages();
 
             // Prepare API call with Context Isolation
+            const formatInstruction = '\n\n【格式要求】请使用纯文本回复，禁止使用任何 markdown 格式，包括但不限于：**粗体**、*斜体*、# 标题、- 列表、```代码块``` 等。允许使用 emoji 表情符号。';
             let messages = [
-                { role: 'system', content: role.prompt },
+                { role: 'system', content: role.prompt + formatInstruction },
                 ...state.chatHistory[state.currentRoleId].filter(m => m.content !== '...')
             ];
 
