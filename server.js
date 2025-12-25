@@ -9,10 +9,16 @@ const WebSocket = require('ws');
 const zlib = require('zlib');
 const { execFile } = require('child_process');
 const ffmpegPath = require('ffmpeg-static');
+const https = require('https');
 
 const app = express();
 const upload = multer({ dest: 'uploads/' });
 const PORT = 3000;
+const HTTPS_PORT = 443;
+
+// SSL 证书配置
+const SSL_KEY_PATH = path.join(__dirname, 'ssl', 'webroleplay.xyz.key');
+const SSL_CERT_PATH = path.join(__dirname, 'ssl', 'webroleplay.xyz.pem');
 
 app.use(bodyParser.json());
 app.use(express.static(path.join(__dirname, 'public')));
@@ -1024,6 +1030,29 @@ app.post('/api/text-to-image', async (req, res) => {
     }
 });
 
-app.listen(PORT, () => {
-    console.log(`服务器运行在 http://0.0.0.0:${PORT}`);
-});
+// // 启动 HTTP 服务器
+// app.listen(PORT, () => {
+//     console.log(`HTTP 服务器运行在 http://0.0.0.0:${PORT}`);
+// });
+
+// 启动 HTTPS 服务器（如果存在 SSL 证书）
+if (fs.existsSync(SSL_KEY_PATH) && fs.existsSync(SSL_CERT_PATH)) {
+    try {
+        const sslOptions = {
+            key: fs.readFileSync(SSL_KEY_PATH),
+            cert: fs.readFileSync(SSL_CERT_PATH)
+        };
+
+        https.createServer(sslOptions, app).listen(HTTPS_PORT, () => {
+            console.log(`HTTPS 服务器运行在 https://0.0.0.0:${HTTPS_PORT}`);
+        });
+    } catch (error) {
+        console.error('启动 HTTPS 服务器失败:', error.message);
+        console.log('请确保 SSL 证书文件格式正确');
+    }
+} else {
+    console.log('未找到 SSL 证书文件，HTTPS 服务器未启动');
+    console.log(`请将证书文件放置到：`);
+    console.log(`  - 私钥: ${SSL_KEY_PATH}`);
+    console.log(`  - 证书: ${SSL_CERT_PATH}`);
+}
