@@ -203,13 +203,37 @@
                     <p class="text-xs text-gray-400 mt-1">Key 将保存在您的浏览器本地存储中</p>
                 </div>
                 <div>
-                    <label class="block text-sm font-medium text-gray-700 mb-1">选择模型</label>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">模型列表</label>
                     <input type="text" id="modelSearch" placeholder="搜索模型 (如: gpt-4, claude)..."
                            class="w-full px-4 py-3 md:py-2 border border-gray-300 rounded-t-lg focus:ring-2 focus:ring-blue-500 outline-none border-b-0 text-base md:text-sm">
                     <select id="modelSelect" size="5" class="w-full px-2 py-1 border border-gray-300 rounded-b-lg focus:ring-2 focus:ring-blue-500 outline-none bg-white text-base">
                         <option value="openai/gpt-3.5-turbo">Loading models...</option>
                     </select>
                     <button id="refreshModels" class="text-sm md:text-xs text-blue-600 mt-2 md:mt-1 hover:underline py-1">刷新模型列表</button>
+                </div>
+                <div class="space-y-3 bg-gray-50 p-3 rounded-lg">
+                    <h3 class="text-sm font-bold text-gray-800">场景模型配置</h3>
+                    <div>
+                        <label class="block text-xs font-medium text-gray-600 mb-1">🎭 角色生成模型</label>
+                        <select id="roleGenModel" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none bg-white text-sm">
+                            <option value="">从上方列表选择...</option>
+                        </select>
+                        <p class="text-[10px] text-gray-400 mt-1">用于 AI 生成角色描述和场景</p>
+                    </div>
+                    <div>
+                        <label class="block text-xs font-medium text-gray-600 mb-1">💬 对话模型</label>
+                        <select id="chatModel" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none bg-white text-sm">
+                            <option value="">从上方列表选择...</option>
+                        </select>
+                        <p class="text-[10px] text-gray-400 mt-1">用于与角色对话及自动生成用户回复</p>
+                    </div>
+                    <div>
+                        <label class="block text-xs font-medium text-gray-600 mb-1">🖼️ 图片提示词模型</label>
+                        <select id="imagePromptModel" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none bg-white text-sm">
+                            <option value="">从上方列表选择...</option>
+                        </select>
+                        <p class="text-[10px] text-gray-400 mt-1">用于根据文本生成图片提示词</p>
+                    </div>
                 </div>
                 <hr class="border-gray-100">
                 <div class="space-y-3">
@@ -363,6 +387,9 @@
         const state = {
             apiKey: localStorage.getItem('openrouter_api_key') || '',
             selectedModel: localStorage.getItem('selected_model') || 'x-ai/grok-4.1-fast',
+            roleGenModel: localStorage.getItem('role_gen_model') || 'x-ai/grok-4.1-fast',
+            chatModel: localStorage.getItem('chat_model') || 'google/gemini-2.5-flash-preview',
+            imagePromptModel: localStorage.getItem('image_prompt_model') || 'x-ai/grok-4.1-fast',
             volcAppId: localStorage.getItem('volc_appid') || '',
             volcToken: localStorage.getItem('volc_token') || '',
             volcTtsToken: localStorage.getItem('volc_tts_token') || '',
@@ -473,6 +500,9 @@
             modelSearch: document.getElementById('modelSearch'),
             modelSelect: document.getElementById('modelSelect'),
             refreshModels: document.getElementById('refreshModels'),
+            roleGenModel: document.getElementById('roleGenModel'),
+            chatModel: document.getElementById('chatModel'),
+            imagePromptModel: document.getElementById('imagePromptModel'),
 
             roleList: document.getElementById('roleList'),
             addRoleBtn: document.getElementById('addRoleBtn'),
@@ -631,6 +661,9 @@
             elements.saveSettings.onclick = () => {
                 state.apiKey = elements.apiKeyInput.value;
                 state.selectedModel = elements.modelSelect.value;
+                state.roleGenModel = elements.roleGenModel.value || state.roleGenModel;
+                state.chatModel = elements.chatModel.value || state.chatModel;
+                state.imagePromptModel = elements.imagePromptModel.value || state.imagePromptModel;
                 state.volcAppId = elements.volcAppId.value;
                 state.volcToken = elements.volcToken.value;
                 state.volcTtsToken = elements.volcTtsToken.value;
@@ -646,6 +679,9 @@
 
                 localStorage.setItem('openrouter_api_key', state.apiKey);
                 localStorage.setItem('selected_model', state.selectedModel);
+                localStorage.setItem('role_gen_model', state.roleGenModel);
+                localStorage.setItem('chat_model', state.chatModel);
+                localStorage.setItem('image_prompt_model', state.imagePromptModel);
                 localStorage.setItem('volc_appid', state.volcAppId);
                 localStorage.setItem('volc_token', state.volcToken);
                 localStorage.setItem('volc_tts_token', state.volcTtsToken);
@@ -856,6 +892,29 @@
             if (models.length === 0) {
                 elements.modelSelect.innerHTML = '<option disabled>未找到匹配模型</option>';
             }
+
+            // 同时更新场景模型选择器
+            updateScenarioModelSelects(state.allModels);
+        }
+
+        // 更新场景模型选择器
+        function updateScenarioModelSelects(models) {
+            const selects = [
+                { el: elements.roleGenModel, value: state.roleGenModel },
+                { el: elements.chatModel, value: state.chatModel },
+                { el: elements.imagePromptModel, value: state.imagePromptModel }
+            ];
+
+            selects.forEach(({ el, value }) => {
+                el.innerHTML = '<option value="">从上方列表选择...</option>';
+                models.forEach(model => {
+                    const option = document.createElement('option');
+                    option.value = model.id;
+                    option.textContent = model.name || model.id;
+                    if (model.id === value) option.selected = true;
+                    el.appendChild(option);
+                });
+            });
         }
 
         function renderRoles() {
@@ -1029,7 +1088,7 @@ Return the result in JSON format with the following fields:
 Respond ONLY with the JSON object. Do not include markdown code blocks.`;
 
             try {
-                console.log('Generating role with model:', state.selectedModel);
+                console.log('Generating role with model:', state.roleGenModel);
                 const response = await fetch('/api/proxy-llm', {
                     method: 'POST',
                     headers: {
@@ -1037,7 +1096,7 @@ Respond ONLY with the JSON object. Do not include markdown code blocks.`;
                     },
                     body: JSON.stringify({
                         apiKey: state.apiKey,
-                        model: state.selectedModel,
+                        model: state.roleGenModel,
                         messages: [
                             { role: 'system', content: systemPrompt },
                             { role: 'user', content: `Idea: ${userIdea}` }
@@ -1749,12 +1808,13 @@ Message: ${msg.content}
 Generate a concise, visual description suitable for image generation (max 200 words). Focus on visual elements, scene, mood, and style.`;
 
                 // 先用 LLM 生成图片提示词
+                console.log('Generating image prompt with model:', state.imagePromptModel);
                 const llmResponse = await fetch('/api/proxy-llm', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         apiKey: state.apiKey,
-                        model: state.selectedModel,
+                        model: state.imagePromptModel,
                         messages: [{ role: 'user', content: contextPrompt }]
                     })
                 });
@@ -2018,12 +2078,13 @@ The response must be:
             ];
 
             try {
+                console.log('Auto reply with model:', state.chatModel);
                 const response = await fetch('/api/proxy-llm', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         apiKey: state.apiKey,
-                        model: state.selectedModel,
+                        model: state.chatModel,
                         messages: messages
                     })
                 });
@@ -2122,6 +2183,7 @@ The response must be:
 
             try {
                 // 第一次调用 LLM，提供工具
+                console.log('Chat with model:', state.chatModel);
                 let response = await fetch('/api/proxy-llm', {
                     method: 'POST',
                     headers: {
@@ -2129,7 +2191,7 @@ The response must be:
                     },
                     body: JSON.stringify({
                         apiKey: state.apiKey,
-                        model: state.selectedModel,
+                        model: state.chatModel,
                         messages: messages,
                         tools: [TEXT_TO_IMAGE_TOOL],
                         tool_choice: 'auto',
@@ -2176,7 +2238,7 @@ The response must be:
                             },
                             body: JSON.stringify({
                                 apiKey: state.apiKey,
-                                model: state.selectedModel,
+                                model: state.chatModel,
                                 messages: messages
                             })
                         });
