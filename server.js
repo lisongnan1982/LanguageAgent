@@ -364,18 +364,26 @@ app.post('/api/tts', async (req, res) => {
     }
 });
 
-// 火山引擎语音合成接口 (TTS) - 单向流式模式 (v3 API)
-app.post('/api/tts-stream', async (req, res) => {
-    let { text, appid, access_key, resource_id, voice_type } = req.body;
+// 火山引擎语音合成接口 (TTS) - 单向流式模式 (v3 API) - SSE 实时推送
+app.get('/api/tts-stream', async (req, res) => {
+    let { text, appid, access_key, resource_id, voice_type } = req.query;
     if (!text || !appid || !access_key || !resource_id) {
         return res.status(400).json({ success: false, message: '缺少参数: 需要 appid, access_key, resource_id' });
     }
 
-    // 去除可能存在的空格
+    // URL 解码并去除空格
+    text = decodeURIComponent(text);
     appid = appid.trim();
     access_key = access_key.trim();
     resource_id = resource_id.trim();
     if (voice_type) voice_type = voice_type.trim();
+
+    // 设置 SSE 响应头
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.flushHeaders();
 
     try {
         const tts_url = 'https://openspeech.bytedance.com/api/v3/tts/unidirectional';
@@ -385,7 +393,7 @@ app.post('/api/tts-stream', async (req, res) => {
                 text: text,
                 speaker: voice_type || 'zh_female_cancan_mars_bigtts',
                 audio_params: {
-                    format: 'mp3',
+                    format: 'pcm',      // 使用 PCM 格式便于流式播放
                     sample_rate: 24000,
                     enable_timestamp: false
                 },
@@ -396,7 +404,7 @@ app.post('/api/tts-stream', async (req, res) => {
             }
         };
 
-        console.log('Submitting TTS stream request to Volcengine (v3)...');
+        console.log('Submitting TTS stream request to Volcengine (v3 SSE)...');
         console.log('AppID:', appid);
         console.log('Resource ID:', resource_id);
         console.log('Voice Type:', voice_type || 'zh_female_cancan_mars_bigtts');
@@ -415,9 +423,8 @@ app.post('/api/tts-stream', async (req, res) => {
         console.log('TTS Stream Response Status:', response.status);
         console.log('TTS Stream X-Tt-Logid:', response.headers['x-tt-logid']);
 
-        // 收集所有音频数据
-        const audioChunks = [];
         let lineBuffer = '';
+        let chunkIndex = 0;
 
         response.data.on('data', (chunk) => {
             lineBuffer += chunk.toString('utf-8');
@@ -429,20 +436,20 @@ app.post('/api/tts-stream', async (req, res) => {
                 try {
                     const data = JSON.parse(line);
                     if (data.code === 0 && data.data) {
-                        // 解码 base64 音频数据
-                        const audioBuffer = Buffer.from(data.data, 'base64');
-                        audioChunks.push(audioBuffer);
+                        // 实时推送音频块给前端
+                        res.write(`data: ${JSON.stringify({ type: 'audio', data: data.data, index: chunkIndex++ })}\n\n`);
                     } else if (data.code === 20000000) {
                         // 合成完成
-                        console.log('TTS Stream completed');
+                        console.log('TTS Stream completed, total chunks:', chunkIndex);
                         if (data.usage) {
                             console.log('TTS Usage:', data.usage);
                         }
                     } else if (data.code > 0 && data.code !== 20000000) {
                         console.error('TTS Stream error:', data);
+                        res.write(`data: ${JSON.stringify({ type: 'error', message: data.message || 'TTS error' })}\n\n`);
                     }
                 } catch (e) {
-                    console.error('Parse line error:', e.message, 'Line:', line.substring(0, 100));
+                    console.error('Parse line error:', e.message);
                 }
             }
         });
@@ -453,37 +460,34 @@ app.post('/api/tts-stream', async (req, res) => {
                 try {
                     const data = JSON.parse(lineBuffer);
                     if (data.code === 0 && data.data) {
-                        const audioBuffer = Buffer.from(data.data, 'base64');
-                        audioChunks.push(audioBuffer);
+                        res.write(`data: ${JSON.stringify({ type: 'audio', data: data.data, index: chunkIndex++ })}\n\n`);
                     }
                 } catch (e) {
                     // ignore
                 }
             }
-
-            if (audioChunks.length > 0) {
-                const fullAudio = Buffer.concat(audioChunks);
-                const base64Audio = fullAudio.toString('base64');
-                console.log(`TTS Stream audio size: ${(fullAudio.length / 1024).toFixed(2)} KB`);
-                res.json({ success: true, audio: base64Audio });
-            } else {
-                res.status(500).json({ success: false, message: '未收到音频数据' });
-            }
+            // 发送结束信号
+            res.write(`data: ${JSON.stringify({ type: 'end', totalChunks: chunkIndex })}\n\n`);
+            res.end();
         });
 
         response.data.on('error', (err) => {
             console.error('TTS Stream error:', err);
-            res.status(500).json({ success: false, message: err.message });
+            res.write(`data: ${JSON.stringify({ type: 'error', message: err.message })}\n\n`);
+            res.end();
+        });
+
+        // 客户端断开连接时清理
+        req.on('close', () => {
+            console.log('Client closed SSE connection');
+            response.data.destroy();
         });
 
     } catch (error) {
         const errorDetail = error.response?.data || error.message;
         console.error('TTS Stream Error:', errorDetail);
-        res.status(500).json({
-            success: false,
-            message: typeof errorDetail === 'string' ? errorDetail : (errorDetail.message || 'TTS 流式请求失败'),
-            detail: errorDetail
-        });
+        res.write(`data: ${JSON.stringify({ type: 'error', message: typeof errorDetail === 'string' ? errorDetail : 'TTS 流式请求失败' })}\n\n`);
+        res.end();
     }
 });
 

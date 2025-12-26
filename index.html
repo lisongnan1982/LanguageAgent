@@ -1023,7 +1023,7 @@ The scenario should include:
 Return the result in JSON format with the following fields:
 - name: The character's name
 - desc: A short, catchy description (max 30 chars)
-- prompt: The full, detailed system prompt in Chinese. IMPORTANT: The prompt must instruct the character to respond in plain text only, without any markdown formatting (no **bold**, *italic*, # headings, - lists, or code blocks).
+- prompt: The full, detailed system prompt in Chinese. IMPORTANT: The prompt must instruct the character to respond without any markdown formatting (no **bold**, *italic*, # headings, - lists, or code blocks).
 - icon: A single emoji that represents the character.
 
 Respond ONLY with the JSON object. Do not include markdown code blocks.`;
@@ -1387,46 +1387,96 @@ Respond ONLY with the JSON object. Do not include markdown code blocks.`;
             const voiceType = state.volcTtsVoice || 'zh_female_vv_uranus_bigtts';
             const cacheKey = text + '_' + voiceType;
 
-            const playAudioData = (base64Data) => {
+            const playAudioData = (base64Data, format = 'mp3', sampleRate = 24000) => {
                 // Double check if user stopped it while we were fetching
                 if (state.currentPlayingIndex !== null && state.currentPlayingIndex !== index) {
                     return;
                 }
 
                 stopCurrentAudio();
-                
-                const audio = new Audio("data:audio/mp3;base64," + base64Data);
-                state.currentAudio = audio;
-                state.currentPlayingIndex = index;
 
-                updateButtonState(false, true);
+                if (format === 'pcm') {
+                    // 使用 Web Audio API 播放 PCM
+                    playPcmAudio(base64Data, sampleRate, index, updateButtonState);
+                } else {
+                    // 使用 HTML5 Audio 播放 MP3
+                    const audio = new Audio(`data:audio/${format};base64,` + base64Data);
+                    state.currentAudio = audio;
+                    state.currentPlayingIndex = index;
 
-                audio.onended = () => {
-                    updateButtonState(false, false);
+                    updateButtonState(false, true);
+
+                    audio.onended = () => {
+                        updateButtonState(false, false);
+                        state.currentAudio = null;
+                        state.currentPlayingIndex = null;
+                    };
+
+                    audio.onerror = (e) => {
+                        console.error('Audio Playback Error:', e);
+                        alert('音频播放失败');
+                        updateButtonState(false, false);
+                        state.currentAudio = null;
+                        state.currentPlayingIndex = null;
+                    };
+
+                    audio.play().catch(e => {
+                        console.error('Play Promise Error:', e);
+                        updateButtonState(false, false);
+                        state.currentAudio = null;
+                        state.currentPlayingIndex = null;
+                    });
+                }
+            };
+
+            // 播放 PCM 缓存音频
+            const playPcmAudio = (base64Data, sampleRate, idx, updateBtnState) => {
+                if (!state.audioContext) {
+                    state.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                }
+                const audioContext = state.audioContext;
+
+                // 解码 base64 PCM 数据
+                const binaryString = atob(base64Data);
+                const bytes = new Uint8Array(binaryString.length);
+                for (let i = 0; i < binaryString.length; i++) {
+                    bytes[i] = binaryString.charCodeAt(i);
+                }
+
+                // 将 16-bit PCM 转换为 Float32
+                const int16Array = new Int16Array(bytes.buffer);
+                const float32Array = new Float32Array(int16Array.length);
+                for (let i = 0; i < int16Array.length; i++) {
+                    float32Array[i] = int16Array[i] / 32768.0;
+                }
+
+                // 创建 AudioBuffer
+                const audioBuffer = audioContext.createBuffer(1, float32Array.length, sampleRate);
+                audioBuffer.getChannelData(0).set(float32Array);
+
+                // 创建 AudioBufferSourceNode
+                const source = audioContext.createBufferSource();
+                source.buffer = audioBuffer;
+                source.connect(audioContext.destination);
+
+                state.currentAudio = { stop: () => { try { source.stop(); } catch(e) {} } };
+                state.currentPlayingIndex = idx;
+                updateBtnState(false, true);
+
+                source.onended = () => {
+                    updateBtnState(false, false);
                     state.currentAudio = null;
                     state.currentPlayingIndex = null;
                 };
 
-                audio.onerror = (e) => {
-                    console.error('Audio Playback Error:', e);
-                    alert('音频播放失败');
-                    updateButtonState(false, false);
-                    state.currentAudio = null;
-                    state.currentPlayingIndex = null;
-                };
-
-                audio.play().catch(e => {
-                    console.error('Play Promise Error:', e);
-                    updateButtonState(false, false);
-                    state.currentAudio = null;
-                    state.currentPlayingIndex = null;
-                });
+                source.start(0);
             };
 
             // Check cache first
             if (state.ttsCache[cacheKey]) {
                 console.log('Using cached audio');
-                playAudioData(state.ttsCache[cacheKey]);
+                const cached = state.ttsCache[cacheKey];
+                playAudioData(cached.data, cached.format || 'mp3', cached.sampleRate || 24000);
                 return;
             }
 
@@ -1435,24 +1485,13 @@ Respond ONLY with the JSON object. Do not include markdown code blocks.`;
 
             try {
                 const cleanedText = cleanTextForTts(text).substring(0, 1000); // 清理并限制长度
-                let response;
 
                 if (state.volcTtsMode === 'stream') {
-                    // 单向流式模式 (v3 API)
-                    response = await fetch('/api/tts-stream', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            text: cleanedText,
-                            appid: state.volcAppId,
-                            access_key: state.volcTtsAccessKey,
-                            resource_id: state.volcTtsCluster,
-                            voice_type: voiceType
-                        })
-                    });
+                    // 单向流式模式 (v3 API) - 使用 SSE 边收边播
+                    await playTtsStream(cleanedText, voiceType, cacheKey, index, updateButtonState, getButton);
                 } else {
                     // 普通模式 (v1 API)
-                    response = await fetch('/api/tts', {
+                    const response = await fetch('/api/tts', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
@@ -1463,29 +1502,208 @@ Respond ONLY with the JSON object. Do not include markdown code blocks.`;
                             voice_type: voiceType
                         })
                     });
-                }
 
-                const data = await response.json();
-                if (data.success && data.audio) {
-                    state.ttsCache[cacheKey] = data.audio;
+                    const data = await response.json();
+                    if (data.success && data.audio) {
+                        state.ttsCache[cacheKey] = { data: data.audio, format: 'mp3' };
 
-                    // Update button appearance to show it's cached (green color)
-                    const targetBtn = getButton();
-                    if (targetBtn) {
-                        targetBtn.classList.remove('text-gray-400');
-                        targetBtn.classList.add('text-green-500', 'hover:text-green-600');
-                        targetBtn.title = '播放语音 (已缓存)';
+                        // Update button appearance to show it's cached (green color)
+                        const targetBtn = getButton();
+                        if (targetBtn) {
+                            targetBtn.classList.remove('text-gray-400');
+                            targetBtn.classList.add('text-green-500', 'hover:text-green-600');
+                            targetBtn.title = '播放语音 (已缓存)';
+                        }
+
+                        playAudioData(data.audio, 'mp3');
+                    } else {
+                        throw new Error(data.message || '转换失败');
                     }
-
-                    playAudioData(data.audio);
-                } else {
-                    throw new Error(data.message || '转换失败');
                 }
             } catch (err) {
                 console.error('TTS Error:', err);
                 alert('语音合成失败: ' + err.message);
                 updateButtonState(false, false);
             }
+        }
+
+        // 流式 TTS 播放函数 - 使用 Web Audio API 边收边播
+        async function playTtsStream(text, voiceType, cacheKey, index, updateButtonState, getButton) {
+            // 初始化 AudioContext
+            if (!state.audioContext) {
+                state.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            }
+            const audioContext = state.audioContext;
+
+            // PCM 参数（与后端一致）
+            const sampleRate = 24000;
+            const numChannels = 1;
+
+            // 用于排队播放的音频缓冲区
+            let audioQueue = [];
+            let isPlaying = false;
+            let nextPlayTime = 0;
+            let allChunksReceived = false;
+            let totalPcmData = [];
+            let currentSource = null;
+            let isStopped = false;
+
+            // 播放下一个音频块
+            const playNextChunk = () => {
+                if (isStopped || audioQueue.length === 0) {
+                    if (allChunksReceived && audioQueue.length === 0) {
+                        // 播放完成
+                        isPlaying = false;
+                        updateButtonState(false, false);
+                        state.currentAudio = null;
+                        state.currentPlayingIndex = null;
+                    }
+                    return;
+                }
+
+                isPlaying = true;
+                const pcmData = audioQueue.shift();
+
+                // 创建 AudioBuffer
+                const audioBuffer = audioContext.createBuffer(numChannels, pcmData.length, sampleRate);
+                const channelData = audioBuffer.getChannelData(0);
+                for (let i = 0; i < pcmData.length; i++) {
+                    channelData[i] = pcmData[i];
+                }
+
+                // 创建 AudioBufferSourceNode
+                const source = audioContext.createBufferSource();
+                source.buffer = audioBuffer;
+                source.connect(audioContext.destination);
+                currentSource = source;
+
+                // 计算播放时间
+                const currentTime = audioContext.currentTime;
+                if (nextPlayTime < currentTime) {
+                    nextPlayTime = currentTime;
+                }
+
+                source.start(nextPlayTime);
+                nextPlayTime += audioBuffer.duration;
+
+                source.onended = () => {
+                    if (!isStopped) {
+                        playNextChunk();
+                    }
+                };
+            };
+
+            // 停止播放
+            const stopStreamPlayback = () => {
+                isStopped = true;
+                audioQueue = [];
+                if (currentSource) {
+                    try { currentSource.stop(); } catch (e) {}
+                }
+                if (state.streamEventSource) {
+                    state.streamEventSource.close();
+                    state.streamEventSource = null;
+                }
+            };
+
+            // 设置当前音频状态（用于停止功能）
+            state.currentAudio = { stop: stopStreamPlayback };
+            state.currentPlayingIndex = index;
+            updateButtonState(false, true);
+
+            // 构建 SSE URL
+            const params = new URLSearchParams({
+                text: text,
+                appid: state.volcAppId,
+                access_key: state.volcTtsAccessKey,
+                resource_id: state.volcTtsCluster,
+                voice_type: voiceType
+            });
+
+            const eventSource = new EventSource(`/api/tts-stream?${params.toString()}`);
+            state.streamEventSource = eventSource;
+
+            eventSource.onmessage = (event) => {
+                if (isStopped) return;
+
+                try {
+                    const data = JSON.parse(event.data);
+
+                    if (data.type === 'audio') {
+                        // 解码 base64 PCM 数据
+                        const binaryString = atob(data.data);
+                        const bytes = new Uint8Array(binaryString.length);
+                        for (let i = 0; i < binaryString.length; i++) {
+                            bytes[i] = binaryString.charCodeAt(i);
+                        }
+
+                        // 将 16-bit PCM 转换为 Float32（Web Audio API 格式）
+                        const int16Array = new Int16Array(bytes.buffer);
+                        const float32Array = new Float32Array(int16Array.length);
+                        for (let i = 0; i < int16Array.length; i++) {
+                            float32Array[i] = int16Array[i] / 32768.0;
+                        }
+
+                        // 保存用于缓存
+                        totalPcmData.push(...Array.from(bytes));
+
+                        // 加入播放队列
+                        audioQueue.push(float32Array);
+
+                        // 如果还没开始播放，启动播放
+                        if (!isPlaying) {
+                            playNextChunk();
+                        }
+
+                    } else if (data.type === 'end') {
+                        console.log('TTS stream ended, total chunks:', data.totalChunks);
+                        allChunksReceived = true;
+                        eventSource.close();
+                        state.streamEventSource = null;
+
+                        // 缓存完整音频（保存为 PCM base64）
+                        if (totalPcmData.length > 0) {
+                            const pcmBytes = new Uint8Array(totalPcmData);
+                            const base64Pcm = btoa(String.fromCharCode(...pcmBytes));
+                            state.ttsCache[cacheKey] = { data: base64Pcm, format: 'pcm', sampleRate: sampleRate };
+
+                            // Update button appearance
+                            const targetBtn = getButton();
+                            if (targetBtn) {
+                                targetBtn.classList.remove('text-gray-400');
+                                targetBtn.classList.add('text-green-500', 'hover:text-green-600');
+                                targetBtn.title = '播放语音 (已缓存)';
+                            }
+                        }
+
+                        // 如果队列已空，标记完成
+                        if (audioQueue.length === 0 && !isPlaying) {
+                            updateButtonState(false, false);
+                            state.currentAudio = null;
+                            state.currentPlayingIndex = null;
+                        }
+
+                    } else if (data.type === 'error') {
+                        console.error('TTS stream error:', data.message);
+                        eventSource.close();
+                        state.streamEventSource = null;
+                        throw new Error(data.message);
+                    }
+                } catch (e) {
+                    console.error('Error processing SSE data:', e);
+                }
+            };
+
+            eventSource.onerror = (e) => {
+                console.error('SSE connection error:', e);
+                eventSource.close();
+                state.streamEventSource = null;
+                if (!isStopped && !allChunksReceived) {
+                    updateButtonState(false, false);
+                    state.currentAudio = null;
+                    state.currentPlayingIndex = null;
+                }
+            };
         }
 
         async function playAllCachedAudio() {
@@ -1536,8 +1754,8 @@ Respond ONLY with the JSON object. Do not include markdown code blocks.`;
             }
 
             const item = state.playAllQueue.shift();
-            const audio = new Audio("data:audio/mp3;base64," + item.audioData);
-            state.currentAudio = audio;
+            const cachedData = item.audioData;
+            const format = cachedData.format || 'mp3';
 
             // Highlight the current message being played
             const btn = document.querySelector(`button[data-msg-index="${item.index}"]`);
@@ -1550,7 +1768,7 @@ Respond ONLY with the JSON object. Do not include markdown code blocks.`;
                 }
             }
 
-            audio.onended = () => {
+            const onPlayEnded = () => {
                 // Reset button state
                 if (btn) {
                     const icon = btn.querySelector('i');
@@ -1568,17 +1786,59 @@ Respond ONLY with the JSON object. Do not include markdown code blocks.`;
                 }, 500);
             };
 
-            audio.onerror = (e) => {
-                console.error('Audio Playback Error:', e);
-                state.currentAudio = null;
-                // Continue to next even if error
-                playNextInQueue();
-            };
+            if (format === 'pcm') {
+                // 使用 Web Audio API 播放 PCM
+                if (!state.audioContext) {
+                    state.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                }
+                const audioContext = state.audioContext;
+                const sampleRate = cachedData.sampleRate || 24000;
 
-            audio.play().catch(e => {
-                console.error('Play Promise Error:', e);
-                playNextInQueue();
-            });
+                // 解码 base64 PCM 数据
+                const binaryString = atob(cachedData.data);
+                const bytes = new Uint8Array(binaryString.length);
+                for (let i = 0; i < binaryString.length; i++) {
+                    bytes[i] = binaryString.charCodeAt(i);
+                }
+
+                // 将 16-bit PCM 转换为 Float32
+                const int16Array = new Int16Array(bytes.buffer);
+                const float32Array = new Float32Array(int16Array.length);
+                for (let i = 0; i < int16Array.length; i++) {
+                    float32Array[i] = int16Array[i] / 32768.0;
+                }
+
+                // 创建 AudioBuffer
+                const audioBuffer = audioContext.createBuffer(1, float32Array.length, sampleRate);
+                audioBuffer.getChannelData(0).set(float32Array);
+
+                // 创建 AudioBufferSourceNode
+                const source = audioContext.createBufferSource();
+                source.buffer = audioBuffer;
+                source.connect(audioContext.destination);
+
+                state.currentAudio = { stop: () => { try { source.stop(); } catch(e) {} } };
+                source.onended = onPlayEnded;
+                source.start(0);
+            } else {
+                // 使用 HTML5 Audio 播放 MP3
+                const audio = new Audio("data:audio/mp3;base64," + cachedData.data);
+                state.currentAudio = audio;
+
+                audio.onended = onPlayEnded;
+
+                audio.onerror = (e) => {
+                    console.error('Audio Playback Error:', e);
+                    state.currentAudio = null;
+                    // Continue to next even if error
+                    playNextInQueue();
+                };
+
+                audio.play().catch(e => {
+                    console.error('Play Promise Error:', e);
+                    playNextInQueue();
+                });
+            }
         }
 
         function stopPlayAll() {
