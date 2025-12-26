@@ -1136,10 +1136,13 @@ app.post('/api/text-to-image', async (req, res) => {
         const result = response.data;
         console.log('Replicate response status:', result.status);
 
-        if (result.status === 'succeeded' && result.output && result.output[0]) {
+        if (result.status === 'succeeded' && result.output) {
+            // output 可能是数组或单个字符串
+            const imageUrl = Array.isArray(result.output) ? result.output[0] : result.output;
+            console.log('Extracted imageUrl:', imageUrl);
             res.json({
                 success: true,
-                imageUrl: result.output[0],
+                imageUrl: imageUrl,
                 prompt: prompt
             });
         } else if (result.status === 'processing') {
@@ -1165,10 +1168,10 @@ app.post('/api/text-to-image', async (req, res) => {
     }
 });
 
-// // 启动 HTTP 服务器
-// app.listen(PORT, () => {
-//     console.log(`HTTP 服务器运行在 http://0.0.0.0:${PORT}`);
-// });
+// 启动 HTTP 服务器
+app.listen(PORT, () => {
+    console.log(`HTTP 服务器运行在 http://localhost:${PORT}`);
+});
 
 // 启动 HTTPS 服务器（如果存在 SSL 证书）
 if (fs.existsSync(SSL_KEY_PATH) && fs.existsSync(SSL_CERT_PATH)) {
