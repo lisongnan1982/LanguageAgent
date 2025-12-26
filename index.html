@@ -1224,12 +1224,20 @@ Respond ONLY with the JSON object. Do not include markdown code blocks.`;
                         ${contentHtml}
                         ${imageHtml}
                         ${!isUser ? `
-                            <button onclick="playTts('${msg.content.replace(/'/g, "\\'").replace(/\n/g, " ")}', this, ${index})"
-                                    data-msg-index="${index}"
-                                    class="tts-btn absolute -right-11 md:-right-10 bottom-0 p-2 min-w-[44px] min-h-[44px] flex items-center justify-center ${buttonClass} active:scale-110 transition-all"
-                                    title="${buttonTitle}">
-                                <i class="fas fa-volume-up text-lg md:text-base"></i>
-                            </button>
+                            <div class="absolute -right-11 md:-right-10 bottom-0 flex flex-col gap-1">
+                                <button onclick="generateImageFromMessage(${index}, this)"
+                                        data-img-index="${index}"
+                                        class="img-gen-btn p-2 min-w-[44px] min-h-[44px] flex items-center justify-center text-gray-400 hover:text-purple-500 active:scale-110 transition-all"
+                                        title="根据文本生成图片">
+                                    <i class="fas fa-image text-lg md:text-base"></i>
+                                </button>
+                                <button onclick="playTts('${msg.content.replace(/'/g, "\\'").replace(/\n/g, " ")}', this, ${index})"
+                                        data-msg-index="${index}"
+                                        class="tts-btn p-2 min-w-[44px] min-h-[44px] flex items-center justify-center ${buttonClass} active:scale-110 transition-all"
+                                        title="${buttonTitle}">
+                                    <i class="fas fa-volume-up text-lg md:text-base"></i>
+                                </button>
+                            </div>
                         ` : ''}
                     </div>
                 `;
@@ -1704,6 +1712,95 @@ Respond ONLY with the JSON object. Do not include markdown code blocks.`;
                     state.currentPlayingIndex = null;
                 }
             };
+        }
+
+        // 根据消息内容生成图片
+        async function generateImageFromMessage(messageIndex, btn) {
+            if (!state.currentRoleId) return;
+
+            const messages = state.chatHistory[state.currentRoleId] || [];
+            const msg = messages[messageIndex];
+            if (!msg || msg.role !== 'assistant') {
+                alert('只能为 AI 回复生成图片');
+                return;
+            }
+
+            // 检查 Replicate Token
+            if (!state.replicateToken) {
+                alert('请先在设置中配置 Replicate API Token');
+                return;
+            }
+
+            // 更新按钮状态为加载中
+            const icon = btn.querySelector('i');
+            const originalClass = icon.className;
+            icon.className = 'fas fa-spinner fa-spin text-lg md:text-base';
+            btn.disabled = true;
+            btn.classList.add('text-purple-500');
+            btn.classList.remove('text-gray-400');
+
+            try {
+                // 构建图片生成提示词 - 根据当前消息内容生成描述性提示词
+                const role = state.roles.find(r => r.id === state.currentRoleId);
+                const contextPrompt = `Based on this roleplay context, generate a vivid image prompt in English:
+Character: ${role ? role.name : 'Unknown'}
+Message: ${msg.content}
+
+Generate a concise, visual description suitable for image generation (max 200 words). Focus on visual elements, scene, mood, and style.`;
+
+                // 先用 LLM 生成图片提示词
+                const llmResponse = await fetch('/api/proxy-llm', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        apiKey: state.apiKey,
+                        model: state.selectedModel,
+                        messages: [{ role: 'user', content: contextPrompt }]
+                    })
+                });
+
+                if (!llmResponse.ok) {
+                    throw new Error('生成图片提示词失败');
+                }
+
+                const llmData = await llmResponse.json();
+                const imagePrompt = llmData.choices?.[0]?.message?.content || msg.content;
+
+                console.log('Generated image prompt:', imagePrompt);
+
+                // 调用文生图 API
+                const imageResponse = await fetch('/api/text-to-image', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        apiToken: state.replicateToken,
+                        prompt: imagePrompt,
+                        model: state.replicateModel,
+                        width: 768,
+                        height: 768
+                    })
+                });
+
+                const imageData = await imageResponse.json();
+
+                if (imageData.success && imageData.imageUrl) {
+                    // 更新消息，添加图片
+                    msg.imageUrl = imageData.imageUrl;
+                    msg.imagePrompt = imagePrompt;
+                    saveChatHistory();
+                    renderMessages();
+                } else {
+                    throw new Error(imageData.message || '图片生成失败');
+                }
+            } catch (err) {
+                console.error('Image generation error:', err);
+                alert('图片生成失败: ' + err.message);
+                // 恢复按钮状态
+                icon.className = originalClass;
+                btn.disabled = false;
+                btn.classList.remove('text-purple-500');
+                btn.classList.add('text-gray-400');
+            }
         }
 
         async function playAllCachedAudio() {
