@@ -1069,6 +1069,7 @@ app.post('/api/text-to-image', async (req, res) => {
             // 新模型使用 aspect_ratio 参数
             restImageInput = {
                 prompt: prompt,
+                disable_safety_checker: true,
                 aspect_ratio: aspect_ratio || restModelConfig.defaultAspectRatio
             };
 
