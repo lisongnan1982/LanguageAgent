@@ -1598,7 +1598,7 @@ Respond ONLY with the JSON object. Do not include markdown code blocks.`;
             }
         }
 
-        // 流式 TTS 播放函数 - 使用 Web Audio API 边收边播
+        // 流式 TTS 播放函数 - 使用 Web Audio API 边收边播（带缓冲）
         async function playTtsStream(text, voiceType, cacheKey, index, updateButtonState, getButton) {
             // 初始化 AudioContext
             if (!state.audioContext) {
@@ -1610,12 +1610,18 @@ Respond ONLY with the JSON object. Do not include markdown code blocks.`;
             const sampleRate = 24000;
             const numChannels = 1;
 
+            // 缓冲配置：2秒 = 24000 * 2 = 48000 samples = 96000 bytes (16-bit)
+            const BUFFER_DURATION_SEC = 2;
+            const BUFFER_THRESHOLD_BYTES = sampleRate * 2 * BUFFER_DURATION_SEC; // 2 bytes per sample
+
             // 用于排队播放的音频缓冲区
             let audioQueue = [];
             let isPlaying = false;
             let nextPlayTime = 0;
             let allChunksReceived = false;
-            let totalPcmData = [];
+            let totalPcmData = []; // 用于保存完整音频数据
+            let bufferedBytes = 0; // 当前已缓冲的字节数
+            let bufferingComplete = false; // 缓冲是否完成
             let currentSource = null;
             let isStopped = false;
 
@@ -1664,6 +1670,17 @@ Respond ONLY with the JSON object. Do not include markdown code blocks.`;
                 };
             };
 
+            // 尝试开始播放（需要缓冲足够或收到全部数据）
+            const tryStartPlayback = () => {
+                if (isPlaying || isStopped) return;
+
+                // 如果缓冲完成（达到阈值或所有数据已接收），开始播放
+                if (bufferingComplete || allChunksReceived) {
+                    console.log(`Starting playback: buffered ${bufferedBytes} bytes, threshold ${BUFFER_THRESHOLD_BYTES}`);
+                    playNextChunk();
+                }
+            };
+
             // 停止播放
             const stopStreamPlayback = () => {
                 isStopped = true;
@@ -1694,6 +1711,8 @@ Respond ONLY with the JSON object. Do not include markdown code blocks.`;
             const eventSource = new EventSource(`/api/tts-stream?${params.toString()}`);
             state.streamEventSource = eventSource;
 
+            console.log(`TTS Stream: buffering ${BUFFER_DURATION_SEC}s (${BUFFER_THRESHOLD_BYTES} bytes) before playback...`);
+
             eventSource.onmessage = (event) => {
                 if (isStopped) return;
 
@@ -1715,37 +1734,62 @@ Respond ONLY with the JSON object. Do not include markdown code blocks.`;
                             float32Array[i] = int16Array[i] / 32768.0;
                         }
 
-                        // 保存用于缓存
-                        totalPcmData.push(...Array.from(bytes));
+                        // 保存用于缓存（使用原始字节）
+                        for (let i = 0; i < bytes.length; i++) {
+                            totalPcmData.push(bytes[i]);
+                        }
+
+                        // 更新缓冲计数
+                        bufferedBytes += bytes.length;
 
                         // 加入播放队列
                         audioQueue.push(float32Array);
 
-                        // 如果还没开始播放，启动播放
-                        if (!isPlaying) {
-                            playNextChunk();
+                        // 检查是否达到缓冲阈值
+                        if (!bufferingComplete && bufferedBytes >= BUFFER_THRESHOLD_BYTES) {
+                            bufferingComplete = true;
+                            console.log(`Buffer threshold reached (${bufferedBytes} bytes), starting playback...`);
                         }
 
+                        // 尝试开始播放
+                        tryStartPlayback();
+
                     } else if (data.type === 'end') {
-                        console.log('TTS stream ended, total chunks:', data.totalChunks);
+                        console.log('TTS stream ended, total chunks:', data.totalChunks, 'total bytes:', totalPcmData.length);
                         allChunksReceived = true;
                         eventSource.close();
                         state.streamEventSource = null;
 
                         // 缓存完整音频（保存为 PCM base64）
                         if (totalPcmData.length > 0) {
-                            const pcmBytes = new Uint8Array(totalPcmData);
-                            const base64Pcm = btoa(String.fromCharCode(...pcmBytes));
-                            state.ttsCache[cacheKey] = { data: base64Pcm, format: 'pcm', sampleRate: sampleRate };
+                            try {
+                                const pcmBytes = new Uint8Array(totalPcmData);
+                                // 分块转换为 base64，避免大数组导致栈溢出
+                                let base64Pcm = '';
+                                const chunkSize = 32768;
+                                for (let i = 0; i < pcmBytes.length; i += chunkSize) {
+                                    const chunk = pcmBytes.subarray(i, Math.min(i + chunkSize, pcmBytes.length));
+                                    base64Pcm += String.fromCharCode.apply(null, chunk);
+                                }
+                                base64Pcm = btoa(base64Pcm);
 
-                            // Update button appearance
-                            const targetBtn = getButton();
-                            if (targetBtn) {
-                                targetBtn.classList.remove('text-gray-400');
-                                targetBtn.classList.add('text-green-500', 'hover:text-green-600');
-                                targetBtn.title = '播放语音 (已缓存)';
+                                state.ttsCache[cacheKey] = { data: base64Pcm, format: 'pcm', sampleRate: sampleRate };
+                                console.log('TTS audio cached successfully, size:', base64Pcm.length);
+
+                                // Update button appearance
+                                const targetBtn = getButton();
+                                if (targetBtn) {
+                                    targetBtn.classList.remove('text-gray-400');
+                                    targetBtn.classList.add('text-green-500', 'hover:text-green-600');
+                                    targetBtn.title = '播放语音 (已缓存)';
+                                }
+                            } catch (e) {
+                                console.error('Failed to cache TTS audio:', e);
                             }
                         }
+
+                        // 尝试开始播放（如果还没开始）
+                        tryStartPlayback();
 
                         // 如果队列已空，标记完成
                         if (audioQueue.length === 0 && !isPlaying) {
