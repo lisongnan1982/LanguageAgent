@@ -805,16 +805,50 @@ app.post('/api/asr', upload.single('audio'), async (req, res) => {
                 // 更新最终结果
                 if (result.result && result.result.text) {
                     finalResultText = result.result.text;
+                    console.log(`  -> 中间结果: "${finalResultText}"`);
                 }
             }
         }
 
-        console.log('Sent all audio chunks');
+        console.log('Sent all audio chunks, waiting for final result...');
+
+        // 重要：发送完最后一个音频块后，继续等待最终识别结果
+        // 火山引擎会在处理完所有音频后返回带有完整文本的响应
+        let waitCount = 0;
+        const MAX_WAIT = 10; // 最多等待10次响应
+
+        while (waitCount < MAX_WAIT) {
+            try {
+                const finalResponse = await waitForMessage(ws, 5000); // 5秒超时
+                waitCount++;
+
+                if (finalResponse?.payloadMsg) {
+                    const result = finalResponse.payloadMsg;
+                    console.log(`等待最终结果 ${waitCount}/${MAX_WAIT}: code=${result.code}, sequence=${result.sequence}`);
+
+                    if (result.result && result.result.text) {
+                        finalResultText = result.result.text;
+                        console.log(`  -> 更新结果: "${finalResultText}"`);
+                    }
+
+                    // 检查是否是最终响应 (sequence < 0 表示结束)
+                    if (result.sequence < 0) {
+                        console.log('收到最终响应 (negative sequence)');
+                        break;
+                    }
+                }
+            } catch (timeoutErr) {
+                console.log('等待超时，结束接收');
+                break;
+            }
+        }
+
         ws.close();
 
         if (fs.existsSync(audioFile.path)) fs.unlinkSync(audioFile.path);
 
-        console.log('ASR Result:', finalResultText);
+        console.log('========== ASR 最终结果 ==========');
+        console.log('识别文本:', finalResultText || '(空)');
 
         if (finalResultText) {
             res.json({ success: true, text: finalResultText });
