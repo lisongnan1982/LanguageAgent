@@ -2375,17 +2375,16 @@ Generate a concise, visual description suitable for image generation (max 200 wo
             const messages = [
                 {
                     role: 'system',
-                    content: `You are an AI writing assistant for a role-play game.
-The user is playing a role and talking to a character named "${role.name}".
-The character's profile is: ${role.prompt}
+                    content: `你是一个创意写作助手，帮助用户在角色扮演对话中想出下一句话。
 
-Your task is to generate a suggested response for the USER to say to the character.
-The response must be:
-1. From the perspective of the USER (the player), NOT the character.
-2. Natural, engaging, and driving the plot forward.
-3. In Chinese.
-4. Respond ONLY with the suggested text, no other words.
-5. Generate a meaningful response even if this is the start of the conversation.`
+当前场景：用户正在和一个名为"${role.name}"的角色对话。
+角色设定：${role.prompt}
+
+请根据对话上下文，帮用户想一句自然、有趣的回复。
+要求：
+- 站在对话者（用户）的角度
+- 用中文回复
+- 只输出建议的对话内容，不要加任何解释或前缀`
                 },
                 ...contextMessages
             ];
