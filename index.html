@@ -2364,12 +2364,15 @@ Generate a concise, visual description suitable for image generation (max 200 wo
             const chatHistory = state.chatHistory[state.currentRoleId] || [];
             const recentHistory = chatHistory.filter(m => m.content && m.content !== '...').slice(-10);
 
-            // 如果对话历史为空，添加一个虚拟的助手消息来引导生成开场白
-            let contextMessages = recentHistory;
-            if (contextMessages.length === 0) {
-                contextMessages = [
-                    { role: 'assistant', content: `你好，我是${role.name}。有什么我可以帮你的吗？` }
-                ];
+            // 将对话历史格式化为易读的文本
+            let conversationText = '';
+            if (recentHistory.length === 0) {
+                conversationText = `${role.name}："你好，我是${role.name}。有什么我可以帮你的吗？"`;
+            } else {
+                conversationText = recentHistory.map(m => {
+                    const speaker = m.role === 'user' ? '用户' : role.name;
+                    return `${speaker}："${m.content}"`;
+                }).join('\n');
             }
 
             const messages = [
@@ -2380,13 +2383,19 @@ Generate a concise, visual description suitable for image generation (max 200 wo
 当前场景：用户正在和一个名为"${role.name}"的角色对话。
 角色设定：${role.prompt}
 
-请根据对话上下文，帮用户想一句自然、有趣的回复。
+对话记录：
+${conversationText}
+
+请帮用户想一句自然、有趣的回复。
 要求：
-- 站在对话者（用户）的角度
-- 用中文回复
-- 只输出建议的对话内容，不要加任何解释或前缀`
+- 站在用户的角度说话
+- 用中文
+- 直接输出对话内容，不要加引号或前缀`
                 },
-                ...contextMessages
+                {
+                    role: 'user',
+                    content: '请帮我想一句回复'
+                }
             ];
 
             try {
