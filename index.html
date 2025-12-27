@@ -878,6 +878,11 @@
                     if (data.text) {
                         elements.userInput.value = data.text;
                         elements.userInput.dispatchEvent(new Event('input'));
+                        // ASR 识别成功后直接发送消息
+                        elements.userInput.disabled = false;
+                        elements.userInput.placeholder = "输入消息...";
+                        sendMessage();
+                        return; // 提前返回，避免 finally 重复设置
                     } else {
                         alert('识别失败: ' + (data.message || '未知错误'));
                     }
