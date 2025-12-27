@@ -77,10 +77,10 @@
                 border-top: 1px solid #e5e7eb;
                 z-index: 50;
             }
-            /* 调整聊天容器高度，为固定输入框留出空间 */
-            .chat-container { height: calc(100dvh - 220px); height: calc(100vh - 220px); }
             /* main 容器需要为固定输入框留出底部空间 */
             .main-with-fixed-input { padding-bottom: 80px; }
+            /* 聊天消息区域底部内边距，确保最后消息不被固定输入框遮挡 */
+            #chatMessages.chat-messages-mobile-fixed { padding-bottom: 80px !important; }
             /* 增大消息气泡的播放按钮触摸区域 */
             .tts-btn {
                 width: 44px;
@@ -363,7 +363,7 @@
                 </button>
             </div>
 
-            <div class="overflow-y-auto flex-1 pr-1 -mr-1 allow-scroll">
+            <div class="overflow-y-auto flex-1 pr-1 -mr-1 allow-scroll pb-4">
             <!-- AI Generation Section -->
             <div class="bg-blue-50 p-4 rounded-xl mb-4 md:mb-6 border border-blue-100">
                 <label class="block text-xs font-bold text-blue-600 uppercase tracking-wider mb-2">AI 灵感一键生成</label>
@@ -377,7 +377,7 @@
                 <p class="text-[10px] text-blue-400 mt-2">AI 将自动为您填写下方的角色详情</p>
             </div>
 
-            <div class="space-y-4">
+            <div class="space-y-4 pb-2">
                 <div>
                     <label class="block text-sm font-medium text-gray-700 mb-1">角色名称</label>
                     <input type="text" id="newRoleName" placeholder="例如：福尔摩斯"
@@ -641,14 +641,17 @@
         function setupMobileInputFixed() {
             const inputArea = document.getElementById('inputArea');
             const mainArea = document.getElementById('mainChatArea');
+            const chatMessages = document.getElementById('chatMessages');
             const isMobile = window.innerWidth < 768;
 
             if (isMobile) {
                 inputArea.classList.add('input-area-mobile-fixed');
                 mainArea.classList.add('main-with-fixed-input');
+                chatMessages.classList.add('chat-messages-mobile-fixed');
             } else {
                 inputArea.classList.remove('input-area-mobile-fixed');
                 mainArea.classList.remove('main-with-fixed-input');
+                chatMessages.classList.remove('chat-messages-mobile-fixed');
             }
         }
 
@@ -773,6 +776,17 @@
             const adjustTextareaHeight = () => {
                 elements.userInput.style.height = 'auto';
                 elements.userInput.style.height = (elements.userInput.scrollHeight) + 'px';
+
+                // 移动端：动态调整底部内边距以适应输入框高度变化
+                const isMobile = window.innerWidth < 768;
+                if (isMobile) {
+                    const inputArea = document.getElementById('inputArea');
+                    const mainArea = document.getElementById('mainChatArea');
+                    if (inputArea && mainArea) {
+                        const inputHeight = inputArea.offsetHeight;
+                        mainArea.style.paddingBottom = (inputHeight + 16) + 'px';
+                    }
+                }
             };
             elements.userInput.addEventListener('input', adjustTextareaHeight);
 
