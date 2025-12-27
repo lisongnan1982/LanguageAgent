@@ -2344,18 +2344,37 @@ Generate a concise, visual description suitable for image generation (max 200 wo
 
         async function autoReply() {
             if (!state.apiKey || !state.currentRoleId) return;
-            
+
             const role = state.roles.find(r => r.id === state.currentRoleId);
             const originalPlaceholder = elements.userInput.placeholder;
+
+            // 保存按钮原始状态并设置加载动画
+            const btn = elements.autoReplyBtn;
+            const icon = btn.querySelector('i');
+            const originalIconClass = icon.className;
+            icon.className = 'fas fa-spinner fa-spin text-lg';
+            btn.classList.add('text-purple-500');
+            btn.classList.remove('text-gray-500');
+
             elements.userInput.placeholder = "AI 正在思考您的回复...";
             elements.userInput.disabled = true;
             elements.autoReplyBtn.disabled = true;
 
             // Prepare messages for the "User Suggestion"
             const chatHistory = state.chatHistory[state.currentRoleId] || [];
+            const recentHistory = chatHistory.filter(m => m.content && m.content !== '...').slice(-10);
+
+            // 如果对话历史为空，添加一个虚拟的助手消息来引导生成开场白
+            let contextMessages = recentHistory;
+            if (contextMessages.length === 0) {
+                contextMessages = [
+                    { role: 'assistant', content: `你好，我是${role.name}。有什么我可以帮你的吗？` }
+                ];
+            }
+
             const messages = [
-                { 
-                    role: 'system', 
+                {
+                    role: 'system',
                     content: `You are an AI writing assistant for a role-play game.
 The user is playing a role and talking to a character named "${role.name}".
 The character's profile is: ${role.prompt}
@@ -2365,13 +2384,16 @@ The response must be:
 1. From the perspective of the USER (the player), NOT the character.
 2. Natural, engaging, and driving the plot forward.
 3. In Chinese.
-4. Respond ONLY with the suggested text, no other words.` 
+4. Respond ONLY with the suggested text, no other words.
+5. Generate a meaningful response even if this is the start of the conversation.`
                 },
-                ...chatHistory.slice(-10) // Send last 10 messages for context
+                ...contextMessages
             ];
 
             try {
                 console.log('Auto reply with model:', state.chatModel);
+                console.log('Auto reply messages:', JSON.stringify(messages, null, 2));
+
                 const response = await fetch('/api/proxy-llm', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -2382,20 +2404,40 @@ The response must be:
                     })
                 });
 
+                console.log('Auto reply response status:', response.status);
+
                 if (!response.ok) {
                     const errorData = await response.json();
+                    console.error('Auto reply error response:', errorData);
                     throw new Error(errorData.error?.message || errorData.message || `HTTP error! status: ${response.status}`);
                 }
 
                 const data = await response.json();
-                if (data.choices && data.choices[0]) {
-                    elements.userInput.value = data.choices[0].message.content.trim().replace(/^["']|["']$/g, '');
-                    elements.userInput.dispatchEvent(new Event('input'));
+                console.log('Auto reply response data:', JSON.stringify(data, null, 2));
+
+                if (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) {
+                    const content = data.choices[0].message.content.trim().replace(/^["']|["']$/g, '');
+                    if (content) {
+                        elements.userInput.value = content;
+                        elements.userInput.dispatchEvent(new Event('input'));
+                        console.log('Auto reply filled input with:', content);
+                    } else {
+                        console.warn('Auto reply returned empty content');
+                        alert('AI 返回了空内容，请重试');
+                    }
+                } else {
+                    console.warn('Auto reply response missing expected data structure:', data);
+                    alert('AI 响应格式异常，请重试');
                 }
             } catch (error) {
                 console.error('Auto Reply Error:', error);
                 alert('无法生成建议回复: ' + error.message);
             } finally {
+                // 恢复按钮原始状态
+                icon.className = originalIconClass;
+                btn.classList.remove('text-purple-500');
+                btn.classList.add('text-gray-500');
+
                 elements.userInput.placeholder = originalPlaceholder;
                 elements.userInput.disabled = false;
                 elements.autoReplyBtn.disabled = false;
