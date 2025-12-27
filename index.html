@@ -159,7 +159,7 @@
                     <form id="chatForm" class="flex gap-2 items-end">
                         <button type="button" id="voiceBtn"
                                 class="w-11 h-11 md:w-10 md:h-10 flex items-center justify-center rounded-full bg-gray-100 hover:bg-blue-100 active:bg-blue-200 text-gray-500 hover:text-blue-600 transition-all disabled:opacity-50 flex-shrink-0"
-                                disabled title="按住说话">
+                                disabled title="语音输入">
                             <i class="fas fa-microphone text-lg"></i>
                         </button>
                         <button type="button" id="autoReplyBtn"
@@ -178,7 +178,7 @@
                     </form>
                     <div id="recordingStatus" class="hidden text-center mt-2">
                         <span class="inline-flex items-center px-3 py-1 rounded-full bg-red-100 text-red-600 text-xs font-medium animate-pulse">
-                            <i class="fas fa-circle mr-2"></i> 正在录音... 松开按钮停止
+                            <i class="fas fa-circle mr-2"></i> 正在录音... 点击按钮停止
                         </span>
                     </div>
                 </div>
@@ -802,17 +802,17 @@
                 return '';
             }
 
-            // 按住说话（Push-to-Talk）逻辑
-            let audioStream = null;
-            let isRecording = false;
-
-            async function startRecording() {
-                if (isRecording) return;
-                isRecording = true;
+            elements.voiceBtn.onclick = async () => {
+                if (mediaRecorder && mediaRecorder.state === 'recording') {
+                    mediaRecorder.stop();
+                    elements.recordingStatus.classList.add('hidden');
+                    elements.voiceBtn.classList.remove('bg-red-500', 'text-white');
+                    return;
+                }
 
                 try {
                     // 请求高质量音频，适合语音识别
-                    audioStream = await navigator.mediaDevices.getUserMedia({
+                    const stream = await navigator.mediaDevices.getUserMedia({
                         audio: {
                             echoCancellation: true,
                             noiseSuppression: true,
@@ -822,7 +822,7 @@
 
                     const mimeType = getSupportedMimeType();
                     const options = mimeType ? { mimeType } : {};
-                    mediaRecorder = new MediaRecorder(audioStream, options);
+                    mediaRecorder = new MediaRecorder(stream, options);
                     audioChunks = [];
 
                     mediaRecorder.ondataavailable = (event) => {
@@ -835,68 +835,17 @@
                         const actualMimeType = mediaRecorder.mimeType || mimeType || 'audio/webm';
                         const audioBlob = new Blob(audioChunks, { type: actualMimeType });
                         await handleVoiceUpload(audioBlob);
-                        if (audioStream) {
-                            audioStream.getTracks().forEach(track => track.stop());
-                            audioStream = null;
-                        }
+                        stream.getTracks().forEach(track => track.stop());
                     };
 
                     mediaRecorder.start(100); // 每100ms收集一次数据，提高兼容性
                     elements.recordingStatus.classList.remove('hidden');
                     elements.voiceBtn.classList.add('bg-red-500', 'text-white');
                 } catch (err) {
-                    isRecording = false;
                     alert('无法访问麦克风，请确保已授予权限。');
                     console.error(err);
                 }
-            }
-
-            function stopRecording() {
-                if (!isRecording) return;
-                isRecording = false;
-
-                if (mediaRecorder && mediaRecorder.state === 'recording') {
-                    mediaRecorder.stop();
-                }
-                elements.recordingStatus.classList.add('hidden');
-                elements.voiceBtn.classList.remove('bg-red-500', 'text-white');
-            }
-
-            // 鼠标事件 - 桌面端
-            elements.voiceBtn.addEventListener('mousedown', (e) => {
-                e.preventDefault();
-                startRecording();
-            });
-
-            elements.voiceBtn.addEventListener('mouseup', (e) => {
-                e.preventDefault();
-                stopRecording();
-            });
-
-            elements.voiceBtn.addEventListener('mouseleave', (e) => {
-                // 如果鼠标移出按钮区域也停止录音
-                if (isRecording) {
-                    stopRecording();
-                }
-            });
-
-            // 触摸事件 - 移动端
-            elements.voiceBtn.addEventListener('touchstart', (e) => {
-                e.preventDefault();
-                startRecording();
-            });
-
-            elements.voiceBtn.addEventListener('touchend', (e) => {
-                e.preventDefault();
-                stopRecording();
-            });
-
-            elements.voiceBtn.addEventListener('touchcancel', (e) => {
-                // 触摸被取消时也停止录音
-                if (isRecording) {
-                    stopRecording();
-                }
-            });
+            };
 
             async function handleVoiceUpload(blob) {
                 if (!state.volcAppId || !state.volcToken) {
@@ -1172,6 +1121,8 @@ The scenario should include:
 3. A comprehensive System Prompt that includes:
    - Personality traits and psychological depth.
    - Detailed background and motivations.
+   - Specific speech patterns, catchphrases, or linguistic quirks.
+   - Guidelines on how to react to different user inputs.
    - The setting or environment they are currently in.
 
 Return the result in JSON format with the following fields:
