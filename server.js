@@ -641,12 +641,35 @@ app.post('/api/asr', upload.single('audio'), async (req, res) => {
         return res.status(400).json({ success: false, message: '缺少参数' });
     }
 
+    // 调试：打印上传的文件信息
+    console.log('========== ASR 调试信息 ==========');
+    console.log('上传文件名:', audioFile.originalname);
+    console.log('MIME 类型:', audioFile.mimetype);
+    console.log('文件大小:', audioFile.size, 'bytes');
+    console.log('临时路径:', audioFile.path);
+
+    // 调试：保存原始上传文件的副本（便于分析）
+    const debugDir = path.join(__dirname, 'debug_audio');
+    if (!fs.existsSync(debugDir)) {
+        fs.mkdirSync(debugDir, { recursive: true });
+    }
+    const timestamp = Date.now();
+    const debugOriginalPath = path.join(debugDir, `original_${timestamp}_${audioFile.originalname || 'audio'}`);
+    fs.copyFileSync(audioFile.path, debugOriginalPath);
+    console.log('已保存原始音频到:', debugOriginalPath);
+
     let ws = null;
     try {
         // 1. Convert audio to required format (PCM s16le, 16k, 1ch)
-        console.log('Converting audio to PCM...');
+        console.log('正在使用 ffmpeg 转换音频...');
         const pcmBuffer = await convertToPcm(audioFile.path);
-        console.log('Audio converted. Size:', pcmBuffer.length);
+        console.log('转换后 PCM 大小:', pcmBuffer.length, 'bytes');
+        console.log('预计音频时长:', (pcmBuffer.length / (16000 * 2)).toFixed(2), '秒');
+
+        // 调试：保存转换后的 PCM 文件
+        const debugPcmPath = path.join(debugDir, `converted_${timestamp}.pcm`);
+        fs.writeFileSync(debugPcmPath, pcmBuffer);
+        console.log('已保存转换后 PCM 到:', debugPcmPath);
 
         // 2. Setup WebSocket Connection
         let targetResource = cluster || 'volcengine_streaming_common';

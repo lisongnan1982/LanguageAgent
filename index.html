@@ -858,33 +858,69 @@
                     return;
                 }
 
+                // 调试信息
+                const debugInfo = {
+                    blobSize: blob.size,
+                    blobType: blob.type,
+                    timestamp: new Date().toISOString()
+                };
+                console.log('========== 前端 ASR 调试 ==========');
+                console.log('Blob 大小:', blob.size, 'bytes');
+                console.log('Blob 类型:', blob.type);
+
+                // 检查音频是否太短
+                if (blob.size < 1000) {
+                    alert(`录音数据太小 (${blob.size} bytes)，可能录音失败。请检查麦克风权限。`);
+                    return;
+                }
+
                 elements.userInput.placeholder = "正在识别语音...";
                 elements.userInput.disabled = true;
+                elements.recordingStatus.innerHTML = `
+                    <span class="inline-flex items-center px-3 py-1 rounded-full bg-blue-100 text-blue-600 text-xs font-medium">
+                        <i class="fas fa-spinner fa-spin mr-2"></i> 正在上传并识别... (${(blob.size/1024).toFixed(1)}KB)
+                    </span>
+                `;
+                elements.recordingStatus.classList.remove('hidden');
 
                 const formData = new FormData();
-                formData.append('audio', blob);
+                // 使用正确的文件扩展名
+                const ext = blob.type.includes('mp4') ? 'mp4' : blob.type.includes('webm') ? 'webm' : 'audio';
+                formData.append('audio', blob, `recording.${ext}`);
                 formData.append('appid', state.volcAppId);
                 formData.append('token', state.volcToken);
                 formData.append('cluster', state.volcCluster);
 
                 try {
+                    console.log('正在上传音频到服务器...');
                     const resp = await fetch('/api/asr', {
                         method: 'POST',
                         body: formData
                     });
                     const data = await resp.json();
+                    console.log('服务器响应:', data);
+
                     if (data.text) {
                         elements.userInput.value = data.text;
                         elements.userInput.dispatchEvent(new Event('input'));
+                        console.log('识别成功:', data.text);
                     } else {
-                        alert('识别失败: ' + (data.message || '未知错误'));
+                        const errorMsg = `识别失败: ${data.message || '未知错误'}\n\n调试信息:\n- 音频大小: ${blob.size} bytes\n- 音频类型: ${blob.type}\n- 详情: ${JSON.stringify(data.detail || {})}`;
+                        alert(errorMsg);
+                        console.error('识别失败:', data);
                     }
                 } catch (err) {
-                    console.error(err);
-                    alert('识别过程中发生错误: ' + (err.message || '网络连接异常'));
+                    console.error('ASR 请求错误:', err);
+                    alert(`识别过程中发生错误: ${err.message || '网络连接异常'}\n\n请检查:\n1. 服务器是否运行\n2. 网络连接是否正常`);
                 } finally {
                     elements.userInput.disabled = false;
                     elements.userInput.placeholder = "输入消息...";
+                    elements.recordingStatus.classList.add('hidden');
+                    elements.recordingStatus.innerHTML = `
+                        <span class="inline-flex items-center px-3 py-1 rounded-full bg-red-100 text-red-600 text-xs font-medium animate-pulse">
+                            <i class="fas fa-circle mr-2"></i> 正在录音... 点击按钮停止
+                        </span>
+                    `;
                 }
             }
         }
