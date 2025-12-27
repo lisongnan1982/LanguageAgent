@@ -641,35 +641,10 @@ app.post('/api/asr', upload.single('audio'), async (req, res) => {
         return res.status(400).json({ success: false, message: '缺少参数' });
     }
 
-    // 调试：打印上传的文件信息
-    console.log('========== ASR 调试信息 ==========');
-    console.log('上传文件名:', audioFile.originalname);
-    console.log('MIME 类型:', audioFile.mimetype);
-    console.log('文件大小:', audioFile.size, 'bytes');
-    console.log('临时路径:', audioFile.path);
-
-    // 调试：保存原始上传文件的副本（便于分析）
-    const debugDir = path.join(__dirname, 'debug_audio');
-    if (!fs.existsSync(debugDir)) {
-        fs.mkdirSync(debugDir, { recursive: true });
-    }
-    const timestamp = Date.now();
-    const debugOriginalPath = path.join(debugDir, `original_${timestamp}_${audioFile.originalname || 'audio'}`);
-    fs.copyFileSync(audioFile.path, debugOriginalPath);
-    console.log('已保存原始音频到:', debugOriginalPath);
-
     let ws = null;
     try {
         // 1. Convert audio to required format (PCM s16le, 16k, 1ch)
-        console.log('正在使用 ffmpeg 转换音频...');
         const pcmBuffer = await convertToPcm(audioFile.path);
-        console.log('转换后 PCM 大小:', pcmBuffer.length, 'bytes');
-        console.log('预计音频时长:', (pcmBuffer.length / (16000 * 2)).toFixed(2), '秒');
-
-        // 调试：保存转换后的 PCM 文件
-        const debugPcmPath = path.join(debugDir, `converted_${timestamp}.pcm`);
-        fs.writeFileSync(debugPcmPath, pcmBuffer);
-        console.log('已保存转换后 PCM 到:', debugPcmPath);
 
         // 2. Setup WebSocket Connection
         let targetResource = cluster || 'volcengine_streaming_common';
@@ -684,7 +659,6 @@ app.post('/api/asr', upload.single('audio'), async (req, res) => {
             "Authorization": `Bearer; ${token.trim()}`
         };
 
-        console.log('Connecting to ASR WebSocket:', wsUrl);
         ws = new WebSocket(wsUrl, { headers });
 
         // 辅助函数：等待并解析一条消息
@@ -716,12 +690,8 @@ app.post('/api/asr', upload.single('audio'), async (req, res) => {
 
         await new Promise((resolve, reject) => {
             ws.on('open', resolve);
-            ws.on('error', (err) => {
-                console.error('WebSocket Handshake Error:', err);
-                reject(err);
-            });
+            ws.on('error', reject);
         });
-        console.log('WebSocket Connected');
 
         // 3. Send Full Client Request
         const requestPayload = {
@@ -754,18 +724,15 @@ app.post('/api/asr', upload.single('audio'), async (req, res) => {
 
         const fullRequest = constructFullRequest(1, requestPayload);
         ws.send(fullRequest);
-        console.log('Sent Full Request');
 
-        // 等待 Full Request 的响应（关键！Python 示例这样做）
+        // 等待 Full Request 的响应
         const fullResponse = await waitForMessage(ws);
-        console.log('Full Request Response:', JSON.stringify(fullResponse?.payloadMsg));
-
         if (fullResponse?.payloadMsg?.code !== SUCCESS_CODE) {
             throw new Error(`Full Request failed: code=${fullResponse?.payloadMsg?.code}, message=${fullResponse?.payloadMsg?.message}`);
         }
 
         // 4. Send Audio Chunks
-        const CHUNK_SIZE = 16000 * 2 * 0.1; // 100ms chunks (matches Python demo seg_duration concept)
+        const CHUNK_SIZE = 16000 * 2 * 0.1; // 100ms chunks
         let offset = 0;
         let finalResultText = '';
         let seq = 1;
@@ -778,7 +745,7 @@ app.post('/api/asr', upload.single('audio'), async (req, res) => {
             offset += CHUNK_SIZE;
         }
 
-        // 发送每个音频块并等待响应（按照 Python 示例流程）
+        // 发送每个音频块并等待响应
         for (let i = 0; i < chunks.length; i++) {
             const chunk = chunks[i];
             const isLast = (i === chunks.length - 1);
@@ -786,23 +753,14 @@ app.post('/api/asr', upload.single('audio'), async (req, res) => {
             const audioRequest = constructAudioRequest(seq++, chunk, isLast);
             ws.send(audioRequest);
 
-            // 等待每个音频包的响应
             const audioResponse = await waitForMessage(ws);
 
             if (audioResponse?.msgType === MESSAGE_TYPE.SERVER_ERROR_RESPONSE) {
-                console.error('ASR Server Error:', audioResponse.errorCode, audioResponse.payloadMsg);
                 throw new Error(`ASR Server Error: ${audioResponse.errorCode}`);
             }
 
             if (audioResponse?.payloadMsg) {
                 const result = audioResponse.payloadMsg;
-
-                // 打印完整响应用于调试
-                if (i === chunks.length - 1 || result.result) {
-                    console.log(`Audio chunk ${i + 1}/${chunks.length} 完整响应:`, JSON.stringify(result, null, 2));
-                } else {
-                    console.log(`Audio chunk ${i + 1}/${chunks.length} response: code=${result.code}, seq=${result.sequence}`);
-                }
 
                 if (result.code !== SUCCESS_CODE) {
                     throw new Error(`Audio chunk failed: code=${result.code}, message=${result.message}`);
@@ -813,61 +771,44 @@ app.post('/api/asr', upload.single('audio'), async (req, res) => {
                     const firstResult = result.result[0];
                     if (firstResult.text) {
                         finalResultText = firstResult.text;
-                        console.log(`  -> 识别文本: "${finalResultText}"`);
                     }
                 } else if (result.result && result.result.text) {
-                    // 兼容对象格式
                     finalResultText = result.result.text;
-                    console.log(`  -> 识别文本(对象): "${finalResultText}"`);
                 }
 
-                // 有些版本的 API 直接在顶层返回 text
                 if (result.text && !finalResultText) {
                     finalResultText = result.text;
-                    console.log(`  -> 顶层文本: "${finalResultText}"`);
                 }
             }
         }
 
-        console.log('Sent all audio chunks, waiting for final result...');
-
-        // 重要：发送完最后一个音频块后，继续等待最终识别结果
-        // 火山引擎会在处理完所有音频后返回带有完整文本的响应
+        // 等待最终识别结果
         let waitCount = 0;
-        const MAX_WAIT = 10; // 最多等待10次响应
+        const MAX_WAIT = 10;
 
         while (waitCount < MAX_WAIT) {
             try {
-                const finalResponse = await waitForMessage(ws, 5000); // 5秒超时
+                const finalResponse = await waitForMessage(ws, 5000);
                 waitCount++;
 
                 if (finalResponse?.payloadMsg) {
                     const result = finalResponse.payloadMsg;
-                    console.log(`等待最终结果 ${waitCount}/${MAX_WAIT}: code=${result.code}, sequence=${result.sequence}`);
 
-                    if (result.result && result.result.text) {
-                        finalResultText = result.result.text;
-                        console.log(`  -> 更新结果: "${finalResultText}"`);
+                    if (result.result && Array.isArray(result.result) && result.result.length > 0) {
+                        finalResultText = result.result[0].text || finalResultText;
                     }
 
-                    // 检查是否是最终响应 (sequence < 0 表示结束)
                     if (result.sequence < 0) {
-                        console.log('收到最终响应 (negative sequence)');
                         break;
                     }
                 }
             } catch (timeoutErr) {
-                console.log('等待超时，结束接收');
                 break;
             }
         }
 
         ws.close();
-
         if (fs.existsSync(audioFile.path)) fs.unlinkSync(audioFile.path);
-
-        console.log('========== ASR 最终结果 ==========');
-        console.log('识别文本:', finalResultText || '(空)');
 
         if (finalResultText) {
             res.json({ success: true, text: finalResultText });
