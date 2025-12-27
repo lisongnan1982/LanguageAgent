@@ -785,6 +785,25 @@
             let mediaRecorder;
             let audioChunks = [];
 
+            // 获取浏览器支持的最佳音频格式
+            function getSupportedMimeType() {
+                const types = [
+                    'audio/webm;codecs=opus',
+                    'audio/webm',
+                    'audio/mp4',
+                    'audio/ogg;codecs=opus',
+                    'audio/wav'
+                ];
+                for (const type of types) {
+                    if (MediaRecorder.isTypeSupported(type)) {
+                        console.log('使用音频格式:', type);
+                        return type;
+                    }
+                }
+                console.log('使用默认音频格式');
+                return ''; // 使用浏览器默认格式
+            }
+
             elements.voiceBtn.onclick = async () => {
                 if (mediaRecorder && mediaRecorder.state === 'recording') {
                     mediaRecorder.stop();
@@ -794,21 +813,37 @@
                 }
 
                 try {
-                    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                    mediaRecorder = new MediaRecorder(stream);
+                    // 请求高质量音频，适合语音识别
+                    const stream = await navigator.mediaDevices.getUserMedia({
+                        audio: {
+                            echoCancellation: true,
+                            noiseSuppression: true,
+                            sampleRate: 16000  // 请求 16kHz（浏览器可能忽略）
+                        }
+                    });
+
+                    const mimeType = getSupportedMimeType();
+                    const options = mimeType ? { mimeType } : {};
+                    mediaRecorder = new MediaRecorder(stream, options);
                     audioChunks = [];
 
                     mediaRecorder.ondataavailable = (event) => {
-                        audioChunks.push(event.data);
+                        if (event.data.size > 0) {
+                            audioChunks.push(event.data);
+                        }
                     };
 
                     mediaRecorder.onstop = async () => {
-                        const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
+                        // 使用实际录制的 MIME 类型
+                        const actualMimeType = mediaRecorder.mimeType || mimeType || 'audio/webm';
+                        console.log('录音完成，实际格式:', actualMimeType);
+                        const audioBlob = new Blob(audioChunks, { type: actualMimeType });
+                        console.log('音频大小:', audioBlob.size, 'bytes');
                         await handleVoiceUpload(audioBlob);
                         stream.getTracks().forEach(track => track.stop());
                     };
 
-                    mediaRecorder.start();
+                    mediaRecorder.start(100); // 每100ms收集一次数据，提高兼容性
                     elements.recordingStatus.classList.remove('hidden');
                     elements.voiceBtn.classList.add('bg-red-500', 'text-white');
                 } catch (err) {
