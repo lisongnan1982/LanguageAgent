@@ -808,17 +808,21 @@ app.post('/api/asr', upload.single('audio'), async (req, res) => {
                     throw new Error(`Audio chunk failed: code=${result.code}, message=${result.message}`);
                 }
 
-                // 更新最终结果 - 检查多种可能的结果位置
-                if (result.result) {
-                    console.log(`  -> result 对象:`, JSON.stringify(result.result));
-                    if (result.result.text) {
-                        finalResultText = result.result.text;
+                // 更新最终结果 - result 是数组格式
+                if (result.result && Array.isArray(result.result) && result.result.length > 0) {
+                    const firstResult = result.result[0];
+                    if (firstResult.text) {
+                        finalResultText = firstResult.text;
                         console.log(`  -> 识别文本: "${finalResultText}"`);
                     }
+                } else if (result.result && result.result.text) {
+                    // 兼容对象格式
+                    finalResultText = result.result.text;
+                    console.log(`  -> 识别文本(对象): "${finalResultText}"`);
                 }
 
                 // 有些版本的 API 直接在顶层返回 text
-                if (result.text) {
+                if (result.text && !finalResultText) {
                     finalResultText = result.text;
                     console.log(`  -> 顶层文本: "${finalResultText}"`);
                 }
