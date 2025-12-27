@@ -796,16 +796,31 @@ app.post('/api/asr', upload.single('audio'), async (req, res) => {
 
             if (audioResponse?.payloadMsg) {
                 const result = audioResponse.payloadMsg;
-                console.log(`Audio chunk ${i + 1}/${chunks.length} response: code=${result.code}`);
+
+                // 打印完整响应用于调试
+                if (i === chunks.length - 1 || result.result) {
+                    console.log(`Audio chunk ${i + 1}/${chunks.length} 完整响应:`, JSON.stringify(result, null, 2));
+                } else {
+                    console.log(`Audio chunk ${i + 1}/${chunks.length} response: code=${result.code}, seq=${result.sequence}`);
+                }
 
                 if (result.code !== SUCCESS_CODE) {
                     throw new Error(`Audio chunk failed: code=${result.code}, message=${result.message}`);
                 }
 
-                // 更新最终结果
-                if (result.result && result.result.text) {
-                    finalResultText = result.result.text;
-                    console.log(`  -> 中间结果: "${finalResultText}"`);
+                // 更新最终结果 - 检查多种可能的结果位置
+                if (result.result) {
+                    console.log(`  -> result 对象:`, JSON.stringify(result.result));
+                    if (result.result.text) {
+                        finalResultText = result.result.text;
+                        console.log(`  -> 识别文本: "${finalResultText}"`);
+                    }
+                }
+
+                // 有些版本的 API 直接在顶层返回 text
+                if (result.text) {
+                    finalResultText = result.text;
+                    console.log(`  -> 顶层文本: "${finalResultText}"`);
                 }
             }
         }
