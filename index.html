@@ -1515,11 +1515,14 @@ Respond ONLY with the JSON object. Do not include markdown code blocks.`;
                     </div>
                 ` : '';
 
+                // 当内容为 "..." 时不显示按钮（正在等待 LLM 回复）
+                const isLoading = msg.content === '...';
+
                 div.innerHTML = `
                     <div class="max-w-[85%] md:max-w-[80%] rounded-2xl p-3 ${isUser ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-800 shadow-sm'} message-content relative group">
                         ${contentHtml}
                         ${imageHtml}
-                        ${!isUser ? `
+                        ${!isUser && !isLoading ? `
                             <div class="absolute -right-11 md:-right-10 bottom-0 flex flex-col gap-1">
                                 <button onclick="generateImageFromMessage(${index}, this)"
                                         data-img-index="${index}"
