@@ -2087,11 +2087,21 @@ Respond ONLY with the JSON object. Do not include markdown code blocks.`;
             try {
                 // 构建图片生成提示词 - 根据当前消息内容生成描述性提示词
                 const role = state.roles.find(r => r.id === state.currentRoleId);
-                const contextPrompt = `Based on this roleplay context, generate a vivid image prompt in English:
-Character: ${role ? role.name : 'Unknown'}
-Message: ${msg.content}
+                const contextPrompt = `You are an image prompt generator. Your task is to create an English image prompt based on the following roleplay context.
 
-Generate a concise, visual description suitable for image generation (max 200 words). Focus on visual elements, scene, mood, and style.`;
+**IMPORTANT: You MUST output ONLY in English. Do NOT use any Chinese characters or other non-English text. This is critical for the image generation model to work correctly.**
+
+Context:
+- Character: ${role ? role.name : 'Unknown'}
+- Scene/Message: ${msg.content}
+
+Generate a concise, vivid visual description in English (max 200 words). Focus on:
+- Visual elements and composition
+- Scene setting and atmosphere
+- Mood and lighting
+- Art style (photorealistic, cinematic, etc.)
+
+Output ONLY the English prompt, nothing else.`;
 
                 // 先用 LLM 生成图片提示词
                 console.log('Generating image prompt with model:', state.imagePromptModel);
@@ -2114,7 +2124,7 @@ Generate a concise, visual description suitable for image generation (max 200 wo
 
                 console.log('Generated image prompt:', imagePrompt);
 
-                // 调用文生图 API
+                // 调用文生图 API（传递 OpenRouter API Key 以便服务端翻译中文提示词）
                 const imageResponse = await fetch('/api/text-to-image', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -2123,7 +2133,8 @@ Generate a concise, visual description suitable for image generation (max 200 wo
                         prompt: imagePrompt,
                         model: state.replicateModel,
                         width: 768,
-                        height: 768
+                        height: 768,
+                        openrouterApiKey: state.apiKey  // 用于服务端翻译中文提示词
                     })
                 });
 

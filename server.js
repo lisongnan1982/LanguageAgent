@@ -16,6 +16,42 @@ const upload = multer({ dest: 'uploads/' });
 const PORT = 3000;
 const HTTPS_PORT = 443;
 
+// 检测文本是否包含中文字符
+function containsChinese(text) {
+    return /[\u4e00-\u9fa5]/.test(text);
+}
+
+// 使用 LLM 将中文提示词翻译成英文
+async function translateToEnglish(text, apiKey, model) {
+    try {
+        const response = await axios.post('https://openrouter.ai/api/v1/chat/completions', {
+            model: model || 'google/gemini-2.0-flash-001',
+            messages: [{
+                role: 'user',
+                content: `Translate the following image generation prompt to English. Output ONLY the English translation, nothing else. Keep the same level of detail and artistic style descriptions.
+
+Text to translate:
+${text}`
+            }]
+        }, {
+            headers: {
+                'Authorization': `Bearer ${apiKey}`,
+                'Content-Type': 'application/json'
+            }
+        });
+
+        const translatedText = response.data.choices?.[0]?.message?.content;
+        if (translatedText && !containsChinese(translatedText)) {
+            console.log('Successfully translated prompt to English');
+            return translatedText.trim();
+        }
+        return text; // 如果翻译失败，返回原文
+    } catch (error) {
+        console.error('Translation error:', error.message);
+        return text; // 翻译失败时返回原文
+    }
+}
+
 // SSL 证书配置
 const SSL_KEY_PATH = path.join(__dirname, 'ssl', 'webroleplay.xyz.key');
 const SSL_CERT_PATH = path.join(__dirname, 'ssl', 'webroleplay.xyz.pem');
@@ -1116,19 +1152,31 @@ app.post('/mcp/tools/call', async (req, res) => {
 
 // 文生图接口 (Text-to-Image) - 使用 Replicate API
 app.post('/api/text-to-image', async (req, res) => {
-    const { apiToken, prompt, negative_prompt, width, height, num_inference_steps, guidance_scale, model, aspect_ratio, creativity } = req.body;
+    const { apiToken, prompt, negative_prompt, width, height, num_inference_steps, guidance_scale, model, aspect_ratio, creativity, openrouterApiKey } = req.body;
 
     if (!apiToken || !prompt) {
         return res.status(400).json({ success: false, message: '缺少必要参数：apiToken 和 prompt' });
     }
 
     try {
+        // 检测并翻译中文提示词
+        let finalPrompt = prompt;
+        if (containsChinese(prompt)) {
+            console.log('检测到中文提示词，正在翻译为英文...');
+            if (openrouterApiKey) {
+                finalPrompt = await translateToEnglish(prompt, openrouterApiKey);
+                console.log('翻译后的提示词:', finalPrompt);
+            } else {
+                console.warn('未提供 OpenRouter API Key，无法翻译中文提示词');
+            }
+        }
+
         // 获取模型配置
         const restModelConfig = IMAGE_MODELS[model] || IMAGE_MODELS['realistic-vision-v5.1'];
 
         console.log('Submitting text-to-image request to Replicate...');
         console.log('Model:', model || 'realistic-vision-v5.1');
-        console.log('Prompt:', prompt);
+        console.log('Prompt:', finalPrompt);
 
         // 构建请求参数
         let restImageInput;
@@ -1139,7 +1187,8 @@ app.post('/api/text-to-image', async (req, res) => {
             // Flux Fast 模型
             restImageInput = {
                 seed: -1,
-                prompt: prompt,
+                prompt: finalPrompt,
+                disable_safety_checker: true,
                 guidance: restModelConfig.guidance,
                 image_size: restModelConfig.defaultImageSize,
                 speed_mode: restModelConfig.speedMode,
@@ -1155,7 +1204,8 @@ app.post('/api/text-to-image', async (req, res) => {
             restImageInput = {
                 width: width || restModelConfig.defaultWidth,
                 height: height || restModelConfig.defaultHeight,
-                prompt: prompt,
+                prompt: finalPrompt,
+                disable_safety_checker: true,
                 output_format: restModelConfig.outputFormat,
                 guidance_scale: restModelConfig.guidanceScale,
                 output_quality: restModelConfig.outputQuality,
@@ -1166,7 +1216,7 @@ app.post('/api/text-to-image', async (req, res) => {
         } else if (restModelConfig.useAspectRatio) {
             // 新模型使用 aspect_ratio 参数 (如 qwen-image-fast, p-image)
             restImageInput = {
-                prompt: prompt,
+                prompt: finalPrompt,
                 disable_safety_checker: true,
                 aspect_ratio: aspect_ratio || restModelConfig.defaultAspectRatio
             };
@@ -1197,7 +1247,7 @@ app.post('/api/text-to-image', async (req, res) => {
                 steps: num_inference_steps || restModelConfig.steps,
                 width: width || restModelConfig.defaultWidth,
                 height: height || restModelConfig.defaultHeight,
-                prompt: prompt,
+                prompt: finalPrompt,
                 negative_prompt: negative_prompt || '(deformed iris, deformed pupils, semi-realistic, cgi, 3d, render, sketch, cartoon, drawing, anime:1.4), text, close up, cropped, out of frame, worst quality, low quality, jpeg artifacts, ugly, duplicate, morbid, mutilated, extra fingers, mutated hands, poorly drawn hands, poorly drawn face, mutation, deformed, blurry, dehydrated, bad anatomy, bad proportions, extra limbs, cloned face, disfigured, gross proportions, malformed limbs, missing arms, missing legs, extra arms, extra legs, fused fingers, too many fingers, long neck',
                 disable_safety_checker: true
             };
@@ -1242,7 +1292,8 @@ app.post('/api/text-to-image', async (req, res) => {
             res.json({
                 success: true,
                 imageUrl: imageUrl,
-                prompt: prompt
+                prompt: finalPrompt,
+                originalPrompt: prompt // 保留原始提示词供参考
             });
         } else if (result.status === 'processing') {
             // 如果还在处理中，返回预测ID供轮询
