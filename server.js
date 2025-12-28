@@ -104,6 +104,29 @@ const IMAGE_MODELS = {
         useAspectRatio: true,
         disable_safety_checker: true,
         useModelEndpoint: true  // 标记使用 model endpoint
+    },
+    'flux-fast': {
+        modelEndpoint: 'prunaai/flux-fast',  // 使用 model endpoint
+        defaultImageSize: 1024,
+        defaultAspectRatio: '1:1',
+        guidance: 3.5,
+        speedMode: 'Extra Juiced 🔥 (more speed)',
+        outputFormat: 'jpg',
+        outputQuality: 80,
+        numInferenceSteps: 28,
+        useModelEndpoint: true,
+        isFluxFast: true  // 标记为 flux-fast 模型
+    },
+    'z-image-turbo': {
+        modelEndpoint: 'prunaai/z-image-turbo',  // 使用 model endpoint
+        defaultWidth: 1024,
+        defaultHeight: 768,
+        guidanceScale: 0,
+        outputFormat: 'jpg',
+        outputQuality: 80,
+        numInferenceSteps: 8,
+        useModelEndpoint: true,
+        isZImageTurbo: true  // 标记为 z-image-turbo 模型
     }
 };
 
@@ -173,8 +196,38 @@ app.post('/api/proxy-llm', async (req, res) => {
                         let apiEndpoint;
                         let requestBody;
 
-                        if (imageModelConfig.useAspectRatio) {
-                            // 新模型使用 aspect_ratio 参数
+                        if (imageModelConfig.isFluxFast) {
+                            // Flux Fast 模型
+                            imageInput = {
+                                seed: -1,
+                                prompt: args.prompt,
+                                disable_safety_checker: true,
+                                guidance: imageModelConfig.guidance,
+                                image_size: imageModelConfig.defaultImageSize,
+                                speed_mode: imageModelConfig.speedMode,
+                                aspect_ratio: args.aspect_ratio || imageModelConfig.defaultAspectRatio,
+                                output_format: imageModelConfig.outputFormat,
+                                output_quality: imageModelConfig.outputQuality,
+                                num_inference_steps: imageModelConfig.numInferenceSteps
+                            };
+                            apiEndpoint = `https://api.replicate.com/v1/models/${imageModelConfig.modelEndpoint}/predictions`;
+                            requestBody = { input: imageInput };
+                        } else if (imageModelConfig.isZImageTurbo) {
+                            // Z-Image Turbo 模型
+                            imageInput = {
+                                width: args.width || imageModelConfig.defaultWidth,
+                                height: args.height || imageModelConfig.defaultHeight,
+                                prompt: args.prompt,
+                                disable_safety_checker: true,
+                                output_format: imageModelConfig.outputFormat,
+                                guidance_scale: imageModelConfig.guidanceScale,
+                                output_quality: imageModelConfig.outputQuality,
+                                num_inference_steps: imageModelConfig.numInferenceSteps
+                            };
+                            apiEndpoint = `https://api.replicate.com/v1/models/${imageModelConfig.modelEndpoint}/predictions`;
+                            requestBody = { input: imageInput };
+                        } else if (imageModelConfig.useAspectRatio) {
+                            // 新模型使用 aspect_ratio 参数 (如 qwen-image-fast, p-image)
                             imageInput = {
                                 prompt: args.prompt,
                                 disable_safety_checker: true,
@@ -1082,8 +1135,36 @@ app.post('/api/text-to-image', async (req, res) => {
         let restApiEndpoint;
         let restRequestBody;
 
-        if (restModelConfig.useAspectRatio) {
-            // 新模型使用 aspect_ratio 参数
+        if (restModelConfig.isFluxFast) {
+            // Flux Fast 模型
+            restImageInput = {
+                seed: -1,
+                prompt: prompt,
+                guidance: restModelConfig.guidance,
+                image_size: restModelConfig.defaultImageSize,
+                speed_mode: restModelConfig.speedMode,
+                aspect_ratio: aspect_ratio || restModelConfig.defaultAspectRatio,
+                output_format: restModelConfig.outputFormat,
+                output_quality: restModelConfig.outputQuality,
+                num_inference_steps: num_inference_steps || restModelConfig.numInferenceSteps
+            };
+            restApiEndpoint = `https://api.replicate.com/v1/models/${restModelConfig.modelEndpoint}/predictions`;
+            restRequestBody = { input: restImageInput };
+        } else if (restModelConfig.isZImageTurbo) {
+            // Z-Image Turbo 模型
+            restImageInput = {
+                width: width || restModelConfig.defaultWidth,
+                height: height || restModelConfig.defaultHeight,
+                prompt: prompt,
+                output_format: restModelConfig.outputFormat,
+                guidance_scale: restModelConfig.guidanceScale,
+                output_quality: restModelConfig.outputQuality,
+                num_inference_steps: num_inference_steps || restModelConfig.numInferenceSteps
+            };
+            restApiEndpoint = `https://api.replicate.com/v1/models/${restModelConfig.modelEndpoint}/predictions`;
+            restRequestBody = { input: restImageInput };
+        } else if (restModelConfig.useAspectRatio) {
+            // 新模型使用 aspect_ratio 参数 (如 qwen-image-fast, p-image)
             restImageInput = {
                 prompt: prompt,
                 disable_safety_checker: true,
