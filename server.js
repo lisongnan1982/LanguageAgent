@@ -183,15 +183,36 @@ const IMAGE_MODELS = {
         useModelEndpoint: true,
         isNanoBananaPro: true  // 标记为 nano-banana-pro 模型
     },
-    'qwen-image-edit': {
-        modelEndpoint: 'qwen/qwen-image-edit-2511',  // 使用 model endpoint
-        defaultAspectRatio: '3:4',
-        goFast: true,
+    'gpt-image-1.5': {
+        modelEndpoint: 'openai/gpt-image-1.5',  // 使用 model endpoint
+        defaultAspectRatio: '1:1',
+        quality: 'high',
+        background: 'auto',
+        moderation: 'auto',
         outputFormat: 'webp',
-        outputQuality: 95,
+        outputCompression: 90,
+        inputFidelity: 'low',
+        numberOfImages: 1,
         disableSafetyChecker: true,
         useModelEndpoint: true,
-        isQwenImageEdit: true  // 标记为 qwen-image-edit 模型
+        isGptImage15: true  // 标记为 gpt-image-1.5 模型
+    },
+    'qwen-image': {
+        modelEndpoint: 'qwen/qwen-image',  // 使用 model endpoint
+        defaultAspectRatio: '16:9',
+        goFast: true,
+        guidance: 4,
+        strength: 0.9,
+        imageSize: 'optimize_for_quality',
+        loraScale: 1,
+        outputFormat: 'webp',
+        enhancePrompt: false,
+        outputQuality: 80,
+        negativePrompt: ' ',
+        disableSafetyChecker: true,
+        numInferenceSteps: 50,
+        useModelEndpoint: true,
+        isQwenImage: true  // 标记为 qwen-image 模型
     }
 };
 
@@ -316,15 +337,38 @@ app.post('/api/proxy-llm', async (req, res) => {
                             };
                             apiEndpoint = `https://api.replicate.com/v1/models/${imageModelConfig.modelEndpoint}/predictions`;
                             requestBody = { input: imageInput };
-                        } else if (imageModelConfig.isQwenImageEdit) {
-                            // Qwen Image Edit 模型
+                        } else if (imageModelConfig.isGptImage15) {
+                            // GPT Image 1.5 模型 (OpenAI on Replicate)
+                            imageInput = {
+                                prompt: args.prompt,
+                                quality: imageModelConfig.quality,
+                                background: imageModelConfig.background,
+                                moderation: imageModelConfig.moderation,
+                                aspect_ratio: args.aspect_ratio || imageModelConfig.defaultAspectRatio,
+                                output_format: imageModelConfig.outputFormat,
+                                input_fidelity: imageModelConfig.inputFidelity,
+                                number_of_images: imageModelConfig.numberOfImages,
+                                disable_safety_checker: imageModelConfig.disableSafetyChecker ? 1 : 0,
+                                output_compression: imageModelConfig.outputCompression
+                            };
+                            apiEndpoint = `https://api.replicate.com/v1/models/${imageModelConfig.modelEndpoint}/predictions`;
+                            requestBody = { input: imageInput };
+                        } else if (imageModelConfig.isQwenImage) {
+                            // Qwen Image 模型 (通义万象)
                             imageInput = {
                                 prompt: args.prompt,
                                 go_fast: imageModelConfig.goFast,
+                                guidance: imageModelConfig.guidance,
+                                strength: imageModelConfig.strength,
+                                image_size: imageModelConfig.imageSize,
+                                lora_scale: imageModelConfig.loraScale,
                                 aspect_ratio: args.aspect_ratio || imageModelConfig.defaultAspectRatio,
                                 output_format: imageModelConfig.outputFormat,
+                                enhance_prompt: imageModelConfig.enhancePrompt,
                                 output_quality: imageModelConfig.outputQuality,
-                                disable_safety_checker: imageModelConfig.disableSafetyChecker
+                                negative_prompt: args.negative_prompt || imageModelConfig.negativePrompt,
+                                disable_safety_checker: imageModelConfig.disableSafetyChecker,
+                                num_inference_steps: imageModelConfig.numInferenceSteps
                             };
                             apiEndpoint = `https://api.replicate.com/v1/models/${imageModelConfig.modelEndpoint}/predictions`;
                             requestBody = { input: imageInput };
@@ -1304,15 +1348,38 @@ app.post('/api/text-to-image', async (req, res) => {
             };
             restApiEndpoint = `https://api.replicate.com/v1/models/${restModelConfig.modelEndpoint}/predictions`;
             restRequestBody = { input: restImageInput };
-        } else if (restModelConfig.isQwenImageEdit) {
-            // Qwen Image Edit 模型
+        } else if (restModelConfig.isGptImage15) {
+            // GPT Image 1.5 模型 (OpenAI on Replicate)
+            restImageInput = {
+                prompt: finalPrompt,
+                quality: restModelConfig.quality,
+                background: restModelConfig.background,
+                moderation: restModelConfig.moderation,
+                aspect_ratio: aspect_ratio || restModelConfig.defaultAspectRatio,
+                output_format: restModelConfig.outputFormat,
+                input_fidelity: restModelConfig.inputFidelity,
+                number_of_images: restModelConfig.numberOfImages,
+                disable_safety_checker: restModelConfig.disableSafetyChecker ? 1 : 0,
+                output_compression: restModelConfig.outputCompression
+            };
+            restApiEndpoint = `https://api.replicate.com/v1/models/${restModelConfig.modelEndpoint}/predictions`;
+            restRequestBody = { input: restImageInput };
+        } else if (restModelConfig.isQwenImage) {
+            // Qwen Image 模型 (通义万象)
             restImageInput = {
                 prompt: finalPrompt,
                 go_fast: restModelConfig.goFast,
+                guidance: restModelConfig.guidance,
+                strength: restModelConfig.strength,
+                image_size: restModelConfig.imageSize,
+                lora_scale: restModelConfig.loraScale,
                 aspect_ratio: aspect_ratio || restModelConfig.defaultAspectRatio,
                 output_format: restModelConfig.outputFormat,
+                enhance_prompt: restModelConfig.enhancePrompt,
                 output_quality: restModelConfig.outputQuality,
-                disable_safety_checker: restModelConfig.disableSafetyChecker
+                negative_prompt: negative_prompt || restModelConfig.negativePrompt,
+                disable_safety_checker: restModelConfig.disableSafetyChecker,
+                num_inference_steps: num_inference_steps || restModelConfig.numInferenceSteps
             };
             restApiEndpoint = `https://api.replicate.com/v1/models/${restModelConfig.modelEndpoint}/predictions`;
             restRequestBody = { input: restImageInput };
