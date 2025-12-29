@@ -163,6 +163,25 @@ const IMAGE_MODELS = {
         numInferenceSteps: 8,
         useModelEndpoint: true,
         isZImageTurbo: true  // 标记为 z-image-turbo 模型
+    },
+    'flux-2-pro': {
+        modelEndpoint: 'black-forest-labs/flux-2-pro',  // 使用 model endpoint
+        defaultResolution: '1 MP',
+        defaultAspectRatio: '1:1',
+        outputFormat: 'webp',
+        outputQuality: 80,
+        safetyTolerance: 5,
+        useModelEndpoint: true,
+        isFlux2Pro: true  // 标记为 flux-2-pro 模型
+    },
+    'nano-banana-pro': {
+        modelEndpoint: 'google/nano-banana-pro',  // 使用 model endpoint
+        defaultResolution: '2K',
+        defaultAspectRatio: '4:3',
+        outputFormat: 'png',
+        safetyFilterLevel: 'block_only_high',
+        useModelEndpoint: true,
+        isNanoBananaPro: true  // 标记为 nano-banana-pro 模型
     }
 };
 
@@ -259,6 +278,31 @@ app.post('/api/proxy-llm', async (req, res) => {
                                 guidance_scale: imageModelConfig.guidanceScale,
                                 output_quality: imageModelConfig.outputQuality,
                                 num_inference_steps: imageModelConfig.numInferenceSteps
+                            };
+                            apiEndpoint = `https://api.replicate.com/v1/models/${imageModelConfig.modelEndpoint}/predictions`;
+                            requestBody = { input: imageInput };
+                        } else if (imageModelConfig.isFlux2Pro) {
+                            // FLUX.2 [pro] 模型
+                            imageInput = {
+                                prompt: args.prompt,
+                                resolution: args.resolution || imageModelConfig.defaultResolution,
+                                aspect_ratio: args.aspect_ratio || imageModelConfig.defaultAspectRatio,
+                                input_images: [],
+                                output_format: imageModelConfig.outputFormat,
+                                output_quality: imageModelConfig.outputQuality,
+                                safety_tolerance: imageModelConfig.safetyTolerance
+                            };
+                            apiEndpoint = `https://api.replicate.com/v1/models/${imageModelConfig.modelEndpoint}/predictions`;
+                            requestBody = { input: imageInput };
+                        } else if (imageModelConfig.isNanoBananaPro) {
+                            // Nano Banana Pro 模型
+                            imageInput = {
+                                prompt: args.prompt,
+                                resolution: args.resolution || imageModelConfig.defaultResolution,
+                                image_input: [],
+                                aspect_ratio: args.aspect_ratio || imageModelConfig.defaultAspectRatio,
+                                output_format: imageModelConfig.outputFormat,
+                                safety_filter_level: imageModelConfig.safetyFilterLevel
                             };
                             apiEndpoint = `https://api.replicate.com/v1/models/${imageModelConfig.modelEndpoint}/predictions`;
                             requestBody = { input: imageInput };
@@ -1210,6 +1254,31 @@ app.post('/api/text-to-image', async (req, res) => {
                 guidance_scale: restModelConfig.guidanceScale,
                 output_quality: restModelConfig.outputQuality,
                 num_inference_steps: num_inference_steps || restModelConfig.numInferenceSteps
+            };
+            restApiEndpoint = `https://api.replicate.com/v1/models/${restModelConfig.modelEndpoint}/predictions`;
+            restRequestBody = { input: restImageInput };
+        } else if (restModelConfig.isFlux2Pro) {
+            // FLUX.2 [pro] 模型
+            restImageInput = {
+                prompt: finalPrompt,
+                resolution: req.body.resolution || restModelConfig.defaultResolution,
+                aspect_ratio: aspect_ratio || restModelConfig.defaultAspectRatio,
+                input_images: [],
+                output_format: restModelConfig.outputFormat,
+                output_quality: restModelConfig.outputQuality,
+                safety_tolerance: restModelConfig.safetyTolerance
+            };
+            restApiEndpoint = `https://api.replicate.com/v1/models/${restModelConfig.modelEndpoint}/predictions`;
+            restRequestBody = { input: restImageInput };
+        } else if (restModelConfig.isNanoBananaPro) {
+            // Nano Banana Pro 模型
+            restImageInput = {
+                prompt: finalPrompt,
+                resolution: req.body.resolution || restModelConfig.defaultResolution,
+                image_input: [],
+                aspect_ratio: aspect_ratio || restModelConfig.defaultAspectRatio,
+                output_format: restModelConfig.outputFormat,
+                safety_filter_level: restModelConfig.safetyFilterLevel
             };
             restApiEndpoint = `https://api.replicate.com/v1/models/${restModelConfig.modelEndpoint}/predictions`;
             restRequestBody = { input: restImageInput };
