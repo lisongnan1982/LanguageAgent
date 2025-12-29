@@ -182,6 +182,16 @@ const IMAGE_MODELS = {
         safetyFilterLevel: 'block_only_high',
         useModelEndpoint: true,
         isNanoBananaPro: true  // 标记为 nano-banana-pro 模型
+    },
+    'qwen-image-edit': {
+        modelEndpoint: 'qwen/qwen-image-edit-2511',  // 使用 model endpoint
+        defaultAspectRatio: '3:4',
+        goFast: true,
+        outputFormat: 'webp',
+        outputQuality: 95,
+        disableSafetyChecker: true,
+        useModelEndpoint: true,
+        isQwenImageEdit: true  // 标记为 qwen-image-edit 模型
     }
 };
 
@@ -303,6 +313,18 @@ app.post('/api/proxy-llm', async (req, res) => {
                                 aspect_ratio: args.aspect_ratio || imageModelConfig.defaultAspectRatio,
                                 output_format: imageModelConfig.outputFormat,
                                 safety_filter_level: imageModelConfig.safetyFilterLevel
+                            };
+                            apiEndpoint = `https://api.replicate.com/v1/models/${imageModelConfig.modelEndpoint}/predictions`;
+                            requestBody = { input: imageInput };
+                        } else if (imageModelConfig.isQwenImageEdit) {
+                            // Qwen Image Edit 模型
+                            imageInput = {
+                                prompt: args.prompt,
+                                go_fast: imageModelConfig.goFast,
+                                aspect_ratio: args.aspect_ratio || imageModelConfig.defaultAspectRatio,
+                                output_format: imageModelConfig.outputFormat,
+                                output_quality: imageModelConfig.outputQuality,
+                                disable_safety_checker: imageModelConfig.disableSafetyChecker
                             };
                             apiEndpoint = `https://api.replicate.com/v1/models/${imageModelConfig.modelEndpoint}/predictions`;
                             requestBody = { input: imageInput };
@@ -1279,6 +1301,18 @@ app.post('/api/text-to-image', async (req, res) => {
                 aspect_ratio: aspect_ratio || restModelConfig.defaultAspectRatio,
                 output_format: restModelConfig.outputFormat,
                 safety_filter_level: restModelConfig.safetyFilterLevel
+            };
+            restApiEndpoint = `https://api.replicate.com/v1/models/${restModelConfig.modelEndpoint}/predictions`;
+            restRequestBody = { input: restImageInput };
+        } else if (restModelConfig.isQwenImageEdit) {
+            // Qwen Image Edit 模型
+            restImageInput = {
+                prompt: finalPrompt,
+                go_fast: restModelConfig.goFast,
+                aspect_ratio: aspect_ratio || restModelConfig.defaultAspectRatio,
+                output_format: restModelConfig.outputFormat,
+                output_quality: restModelConfig.outputQuality,
+                disable_safety_checker: restModelConfig.disableSafetyChecker
             };
             restApiEndpoint = `https://api.replicate.com/v1/models/${restModelConfig.modelEndpoint}/predictions`;
             restRequestBody = { input: restImageInput };
