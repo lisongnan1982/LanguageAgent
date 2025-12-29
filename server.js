@@ -79,7 +79,7 @@ const TEXT_TO_IMAGE_TOOL = {
                 },
                 negative_prompt: {
                     type: 'string',
-                    description: '负面提示词（英文），大部分情况下不需要指定。',
+                    description: '不需要给负面描述词。',
                     default: ''
                 },
                 width: {
@@ -366,7 +366,6 @@ app.post('/api/proxy-llm', async (req, res) => {
                                 output_format: imageModelConfig.outputFormat,
                                 enhance_prompt: imageModelConfig.enhancePrompt,
                                 output_quality: imageModelConfig.outputQuality,
-                                negative_prompt: args.negative_prompt || imageModelConfig.negativePrompt,
                                 disable_safety_checker: imageModelConfig.disableSafetyChecker,
                                 num_inference_steps: imageModelConfig.numInferenceSteps
                             };
@@ -1058,8 +1057,8 @@ const MCP_TOOLS = [
                 },
                 negative_prompt: {
                     type: 'string',
-                    description: '负面提示词（英文），描述不想在图片中出现的内容',
-                    default: '(deformed iris, deformed pupils, semi-realistic, cgi, 3d, render, sketch, cartoon, drawing, anime:1.4), text, close up, cropped, out of frame, worst quality, low quality, jpeg artifacts, ugly, duplicate, morbid, mutilated, extra fingers, mutated hands, poorly drawn hands, poorly drawn face, mutation, deformed, blurry, dehydrated, bad anatomy, bad proportions, extra limbs, cloned face, disfigured, gross proportions, malformed limbs, missing arms, missing legs, extra arms, extra legs, fused fingers, too many fingers, long neck'
+                    description: '不需要提供负面描述词',
+                    default: ''
                 },
                 width: {
                     type: 'number',
@@ -1179,7 +1178,6 @@ app.post('/mcp/tools/call', async (req, res) => {
                 height: args.height || mcpModelConfig.defaultHeight,
                 prompt: args.prompt,
                 disable_safety_checker: true,
-                negative_prompt: args.negative_prompt || '(deformed iris, deformed pupils, semi-realistic, cgi, 3d, render, sketch, cartoon, drawing, anime:1.4), text, close up, cropped, out of frame, worst quality, low quality, jpeg artifacts, ugly, duplicate, morbid, mutilated, extra fingers, mutated hands, poorly drawn hands, poorly drawn face, mutation, deformed, blurry, dehydrated, bad anatomy, bad proportions, extra limbs, cloned face, disfigured, gross proportions, malformed limbs, missing arms, missing legs, extra arms, extra legs, fused fingers, too many fingers, long neck'
             };
 
             // 添加模型特定参数
@@ -1377,7 +1375,6 @@ app.post('/api/text-to-image', async (req, res) => {
                 output_format: restModelConfig.outputFormat,
                 enhance_prompt: restModelConfig.enhancePrompt,
                 output_quality: restModelConfig.outputQuality,
-                negative_prompt: negative_prompt || restModelConfig.negativePrompt,
                 disable_safety_checker: restModelConfig.disableSafetyChecker,
                 num_inference_steps: num_inference_steps || restModelConfig.numInferenceSteps
             };
