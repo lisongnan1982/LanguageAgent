@@ -75,12 +75,12 @@ const TEXT_TO_IMAGE_TOOL = {
             properties: {
                 prompt: {
                     type: 'string',
-                    description: '图片描述文本（必须使用英文）。详细描述想要生成的图片内容，包括主体、风格、质量等。例如："A cute cat sitting on clouds"。如果用户提供中文描述，请先翻译成英文。'
+                    description: '图片描述文本（必须使用英文）。详细描述想要生成的图片内容，包括主体、风格等。例如："A cute cat sitting on clouds"。如果用户提供中文描述，请先翻译成英文。'
                 },
                 negative_prompt: {
                     type: 'string',
-                    description: '负面提示词（英文），描述不想在图片中出现的内容',
-                    default: '(deformed iris, deformed pupils, semi-realistic, cgi, 3d, render, sketch, cartoon, drawing, anime:1.4), text, close up, cropped, out of frame, worst quality, low quality, jpeg artifacts, ugly, duplicate, morbid, mutilated, extra fingers, mutated hands, poorly drawn hands, poorly drawn face, mutation, deformed, blurry, dehydrated, bad anatomy, bad proportions, extra limbs, cloned face, disfigured, gross proportions, malformed limbs, missing arms, missing legs, extra arms, extra legs, fused fingers, too many fingers, long neck'
+                    description: '负面提示词（英文），大部分情况下不需要指定。',
+                    default: ''
                 },
                 width: {
                     type: 'number',
