@@ -1505,6 +1505,15 @@ Respond ONLY with the JSON object. Do not include markdown code blocks.`;
                 return;
             }
 
+            // 找到最后一条 AI 消息的索引（用于判断是否显示重新生成按钮）
+            let lastAssistantIndex = -1;
+            for (let i = messages.length - 1; i >= 0; i--) {
+                if (messages[i].role === 'assistant' && messages[i].content !== '...') {
+                    lastAssistantIndex = i;
+                    break;
+                }
+            }
+
             messages.forEach((msg, index) => {
                 // 跳过工具调用和工具结果消息（这些是技术消息，不应该显示）
                 if (msg.role === 'tool' || msg.tool_calls) {
@@ -1565,6 +1574,14 @@ Respond ONLY with the JSON object. Do not include markdown code blocks.`;
                         ${imageHtml}
                         ${!isUser && !isLoading ? `
                             <div class="absolute -right-11 md:-right-10 bottom-0 flex flex-col gap-1">
+                                ${index === lastAssistantIndex ? `
+                                <button onclick="regenerateMessage(${index}, this)"
+                                        data-regen-index="${index}"
+                                        class="regen-btn p-2 min-w-[44px] min-h-[44px] flex items-center justify-center text-gray-400 hover:text-orange-500 active:scale-110 transition-all"
+                                        title="重新生成回复">
+                                    <i class="fas fa-redo text-lg md:text-base"></i>
+                                </button>
+                                ` : ''}
                                 <button onclick="generateImageFromMessage(${index}, this)"
                                         data-img-index="${index}"
                                         class="img-gen-btn p-2 min-w-[44px] min-h-[44px] flex items-center justify-center text-gray-400 hover:text-purple-500 active:scale-110 transition-all"
@@ -2096,6 +2113,139 @@ Respond ONLY with the JSON object. Do not include markdown code blocks.`;
                     state.currentPlayingIndex = null;
                 }
             };
+        }
+
+        // 重新生成指定索引的 AI 回复
+        async function regenerateMessage(messageIndex, btn) {
+            if (!state.currentRoleId) return;
+
+            const messages = state.chatHistory[state.currentRoleId] || [];
+            const msg = messages[messageIndex];
+            if (!msg || msg.role !== 'assistant') {
+                alert('只能重新生成 AI 回复');
+                return;
+            }
+
+            // 找到对应的用户消息（前一条消息）
+            let userMsgIndex = messageIndex - 1;
+            while (userMsgIndex >= 0 && messages[userMsgIndex].role !== 'user') {
+                userMsgIndex--;
+            }
+            if (userMsgIndex < 0) {
+                alert('找不到对应的用户消息');
+                return;
+            }
+
+            // 更新按钮状态为加载中
+            const icon = btn.querySelector('i');
+            const originalClass = icon.className;
+            icon.className = 'fas fa-spinner animate-spin';
+            btn.disabled = true;
+
+            try {
+                const role = state.roles.find(r => r.id === state.currentRoleId);
+                const formatInstruction = '\n\n【格式要求】请使用纯文本回复，禁止使用任何 markdown 格式，包括但不限于：**粗体**、*斜体*、# 标题、- 列表、```代码块``` 等。允许使用 emoji 表情符号。';
+
+                // 构建到当前消息为止的历史（不包括当前要重新生成的消息）
+                const historyMessages = messages.slice(0, messageIndex).filter(m => m.content !== '...');
+                const compressedSummary = historyMessages.find(m => m.isCompressed && m.role === 'system');
+                const regularMessages = historyMessages.filter(m => !m.isCompressed);
+
+                let systemContent = role.prompt + formatInstruction;
+                if (compressedSummary) {
+                    systemContent += '\n\n【之前的对话摘要】\n' + compressedSummary.content;
+                }
+
+                let apiMessages = [
+                    { role: 'system', content: systemContent },
+                    ...regularMessages
+                ];
+
+                // 显示加载状态
+                msg.content = '...';
+                renderMessages();
+
+                // 调用 LLM
+                const response = await fetch('/api/proxy-llm', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        apiKey: state.apiKey,
+                        model: state.chatModel,
+                        messages: apiMessages,
+                        tools: [TEXT_TO_IMAGE_TOOL],
+                        tool_choice: 'auto',
+                        replicateToken: state.replicateToken,
+                        replicateModel: state.replicateModel
+                    })
+                });
+
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.error?.message || errorData.message || `HTTP error! status: ${response.status}`);
+                }
+
+                let data = await response.json();
+
+                // 处理工具调用（图片生成）
+                if (data.tool_results && data.tool_results.length > 0) {
+                    const toolResult = data.tool_results[0];
+                    const resultData = JSON.parse(toolResult.content);
+
+                    apiMessages.push(data.choices[0].message);
+                    apiMessages.push(toolResult);
+
+                    if (resultData.success && resultData.imageUrl) {
+                        msg.imageUrl = resultData.imageUrl;
+                        msg.imagePrompt = resultData.prompt;
+
+                        // 第二次调用 LLM
+                        const response2 = await fetch('/api/proxy-llm', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                apiKey: state.apiKey,
+                                model: state.chatModel,
+                                messages: apiMessages
+                            })
+                        });
+
+                        if (response2.ok) {
+                            const data2 = await response2.json();
+                            if (data2.choices && data2.choices[0]) {
+                                let content = data2.choices[0].message.content;
+                                content = content.replace(/!\[([^\]]*)\]\([^)]+\)/g, '');
+                                content = content.replace(/https?:\/\/[^\s]+\.(png|jpg|jpeg|gif|webp)[^\s]*/gi, '');
+                                content = content.replace(/\n{3,}/g, '\n\n').trim();
+                                msg.content = content;
+                            }
+                        }
+                    } else if (resultData.error) {
+                        msg.content = `图片生成失败：${resultData.error}`;
+                    }
+                } else {
+                    // 正常回复
+                    if (data.choices && data.choices[0]) {
+                        msg.content = data.choices[0].message.content;
+                    } else {
+                        msg.content = "抱歉，我无法响应。请检查您的设置。";
+                    }
+                }
+
+                // 清除该消息的 TTS 缓存（因为内容已变）
+                const voiceType = state.volcTtsVoice || 'zh_female_vv_uranus_bigtts';
+                const oldCacheKeys = Object.keys(state.ttsCache).filter(k => k.endsWith('_' + voiceType));
+                // 不需要特别清除，因为 cacheKey 是基于内容的
+
+                saveChatHistory();
+            } catch (error) {
+                msg.content = `重新生成失败: ${error.message}`;
+                console.error(error);
+            }
+
+            renderMessages();
+
+            // 恢复按钮状态（renderMessages 会重新创建按钮，所以这里不需要恢复）
         }
 
         // 根据消息内容生成图片
