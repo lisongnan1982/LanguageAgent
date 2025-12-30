@@ -835,14 +835,24 @@ app.post('/api/asr', upload.single('audio'), async (req, res) => {
     const audioFile = req.file;
     const SUCCESS_CODE = 1000;
 
+    // 计时对象
+    const timing = {};
+    const totalStartTime = Date.now();
+
     if (!audioFile || !appid || !token) {
         return res.status(400).json({ success: false, message: '缺少参数' });
     }
 
+    console.log(`[ASR-Server] ========== 开始ASR处理 ==========`);
+    console.log(`[ASR-Server] 接收文件大小: ${(audioFile.size / 1024).toFixed(2)} KB`);
+
     let ws = null;
     try {
         // 1. Convert audio to required format (PCM s16le, 16k, 1ch)
+        const ffmpegStartTime = Date.now();
         const pcmBuffer = await convertToPcm(audioFile.path);
+        timing.ffmpegConvert = Date.now() - ffmpegStartTime;
+        console.log(`[ASR-Server] FFmpeg转换耗时: ${timing.ffmpegConvert} ms, PCM大小: ${(pcmBuffer.length / 1024).toFixed(2)} KB`);
 
         // 2. Setup WebSocket Connection
         let targetResource = cluster || 'volcengine_streaming_common';
@@ -857,6 +867,7 @@ app.post('/api/asr', upload.single('audio'), async (req, res) => {
             "Authorization": `Bearer; ${token.trim()}`
         };
 
+        const wsConnectStartTime = Date.now();
         ws = new WebSocket(wsUrl, { headers });
 
         // 辅助函数：等待并解析一条消息
@@ -890,8 +901,11 @@ app.post('/api/asr', upload.single('audio'), async (req, res) => {
             ws.on('open', resolve);
             ws.on('error', reject);
         });
+        timing.wsConnect = Date.now() - wsConnectStartTime;
+        console.log(`[ASR-Server] WebSocket连接耗时: ${timing.wsConnect} ms`);
 
         // 3. Send Full Client Request
+        const fullRequestStartTime = Date.now();
         const requestPayload = {
             app: {
                 appid: appid.trim(),
@@ -925,11 +939,15 @@ app.post('/api/asr', upload.single('audio'), async (req, res) => {
 
         // 等待 Full Request 的响应
         const fullResponse = await waitForMessage(ws);
+        timing.fullRequest = Date.now() - fullRequestStartTime;
+        console.log(`[ASR-Server] Full Request耗时: ${timing.fullRequest} ms`);
+
         if (fullResponse?.payloadMsg?.code !== SUCCESS_CODE) {
             throw new Error(`Full Request failed: code=${fullResponse?.payloadMsg?.code}, message=${fullResponse?.payloadMsg?.message}`);
         }
 
         // 4. Send Audio Chunks
+        const audioChunksStartTime = Date.now();
         const CHUNK_SIZE = 16000 * 2 * 0.1; // 100ms chunks
         let offset = 0;
         let finalResultText = '';
@@ -942,6 +960,7 @@ app.post('/api/asr', upload.single('audio'), async (req, res) => {
             chunks.push(pcmBuffer.subarray(offset, end));
             offset += CHUNK_SIZE;
         }
+        console.log(`[ASR-Server] 音频分块数: ${chunks.length}, 每块 ${CHUNK_SIZE} bytes`);
 
         // 发送每个音频块并等待响应
         for (let i = 0; i < chunks.length; i++) {
@@ -979,8 +998,11 @@ app.post('/api/asr', upload.single('audio'), async (req, res) => {
                 }
             }
         }
+        timing.audioChunksSend = Date.now() - audioChunksStartTime;
+        console.log(`[ASR-Server] 音频块发送+响应耗时: ${timing.audioChunksSend} ms`);
 
         // 等待最终识别结果
+        const finalWaitStartTime = Date.now();
         let waitCount = 0;
         const MAX_WAIT = 10;
 
@@ -1004,14 +1026,19 @@ app.post('/api/asr', upload.single('audio'), async (req, res) => {
                 break;
             }
         }
+        timing.finalWait = Date.now() - finalWaitStartTime;
+        console.log(`[ASR-Server] 等待最终结果耗时: ${timing.finalWait} ms, 等待次数: ${waitCount}`);
 
         ws.close();
         if (fs.existsSync(audioFile.path)) fs.unlinkSync(audioFile.path);
 
+        timing.total = Date.now() - totalStartTime;
+        console.log(`[ASR-Server] ========== ASR总耗时: ${timing.total} ms ==========`);
+
         if (finalResultText) {
-            res.json({ success: true, text: finalResultText });
+            res.json({ success: true, text: finalResultText, timing });
         } else {
-            res.status(200).json({ success: true, text: "(未识别到有效语音)" });
+            res.status(200).json({ success: true, text: "(未识别到有效语音)", timing });
         }
 
     } catch (error) {
@@ -1021,10 +1048,12 @@ app.post('/api/asr', upload.single('audio'), async (req, res) => {
         }
         if (audioFile && fs.existsSync(audioFile.path)) fs.unlinkSync(audioFile.path);
 
+        timing.total = Date.now() - totalStartTime;
         res.status(500).json({
             success: false,
             message: '语音识别失败',
-            detail: error.message
+            detail: error.message,
+            timing
         });
     }
 });

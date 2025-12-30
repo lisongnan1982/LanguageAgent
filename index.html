@@ -311,8 +311,18 @@
                     </div>
                     <div>
                         <label class="block text-sm font-medium text-gray-700 mb-1">默认音色 (Voice Type)</label>
-                        <input type="text" id="volcTtsVoice" placeholder="例如: zh_female_vv_uranus_bigtts"
-                               class="w-full px-4 py-3 md:py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-base">
+                        <select id="volcTtsVoice" class="w-full px-4 py-3 md:py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-base">
+                            <option value="zh_female_vv_uranus_bigtts">zh_female_vv_uranus_bigtts</option>
+                            <option value="zh_male_dayi_saturn_bigtts">zh_male_dayi_saturn_bigtts</option>
+                            <option value="zh_female_mizai_saturn_bigtts">zh_female_mizai_saturn_bigtts</option>
+                            <option value="zh_female_jitangnv_saturn_bigtts">zh_female_jitangnv_saturn_bigtts</option>
+                            <option value="zh_female_meilinvyou_saturn_bigtts">zh_female_meilinvyou_saturn_bigtts</option>
+                            <option value="zh_female_santongyongns_saturn_bigtts">zh_female_santongyongns_saturn_bigtts</option>
+                            <option value="zh_male_ruyayichen_saturn_bigtts">zh_male_ruyayichen_saturn_bigtts</option>
+                            <option value="saturn_zh_female_cancan_tob">saturn_zh_female_cancan_tob</option>
+                            <option value="saturn_zh_female_keainvsheng_tob">saturn_zh_female_keainvsheng_tob</option>
+                            <option value="saturn_zh_female_tiaopigongzhu_tob">saturn_zh_female_tiaopigongzhu_tob</option>
+                        </select>
                     </div>
                     <div class="pt-2 border-t border-gray-100 mt-2">
                         <div class="flex items-center justify-between mb-2">
@@ -907,6 +917,10 @@
             };
 
             async function handleVoiceUpload(blob) {
+                const asrStartTime = performance.now();
+                console.log(`[ASR] ========== 开始ASR处理 ==========`);
+                console.log(`[ASR] 音频Blob大小: ${(blob.size / 1024).toFixed(2)} KB, 类型: ${blob.type}`);
+
                 if (!state.volcAppId || !state.volcToken) {
                     alert('请先在设置中配置火山引擎 AppID 和 Access Token');
                     return;
@@ -920,19 +934,39 @@
                 elements.userInput.placeholder = "正在识别语音...";
                 elements.userInput.disabled = true;
 
+                const formDataStartTime = performance.now();
                 const formData = new FormData();
                 const ext = blob.type.includes('mp4') ? 'mp4' : blob.type.includes('webm') ? 'webm' : 'audio';
                 formData.append('audio', blob, `recording.${ext}`);
                 formData.append('appid', state.volcAppId);
                 formData.append('token', state.volcToken);
                 formData.append('cluster', state.volcCluster);
+                console.log(`[ASR] FormData准备耗时: ${(performance.now() - formDataStartTime).toFixed(2)} ms`);
 
                 try {
+                    const uploadStartTime = performance.now();
+                    console.log(`[ASR] 开始上传到服务器...`);
                     const resp = await fetch('/api/asr', {
                         method: 'POST',
                         body: formData
                     });
+                    const uploadEndTime = performance.now();
+                    console.log(`[ASR] 服务器响应耗时: ${(uploadEndTime - uploadStartTime).toFixed(2)} ms`);
+
+                    const parseStartTime = performance.now();
                     const data = await resp.json();
+                    console.log(`[ASR] JSON解析耗时: ${(performance.now() - parseStartTime).toFixed(2)} ms`);
+
+                    // 打印服务端返回的计时信息
+                    if (data.timing) {
+                        console.log(`[ASR] === 服务端计时详情 ===`);
+                        for (const [key, value] of Object.entries(data.timing)) {
+                            console.log(`[ASR]   ${key}: ${value} ms`);
+                        }
+                    }
+
+                    const totalTime = performance.now() - asrStartTime;
+                    console.log(`[ASR] ========== ASR总耗时: ${totalTime.toFixed(2)} ms ==========`);
 
                     if (data.text) {
                         elements.userInput.value = data.text;
@@ -946,6 +980,7 @@
                         alert('识别失败: ' + (data.message || '未知错误'));
                     }
                 } catch (err) {
+                    console.error(`[ASR] 错误: ${err.message}`);
                     alert('识别过程中发生错误: ' + (err.message || '网络连接异常'));
                 } finally {
                     elements.userInput.disabled = false;
