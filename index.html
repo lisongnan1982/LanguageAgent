@@ -471,13 +471,6 @@
             </div>
         </div>
 
-        <!-- Bottom Controls -->
-        <div class="pb-8 flex flex-col items-center gap-4">
-            <button id="voiceChatToggleBtn" class="w-20 h-20 rounded-full bg-purple-600 hover:bg-purple-700 active:bg-purple-800 text-white shadow-lg transition-all flex items-center justify-center">
-                <i class="fas fa-microphone text-2xl"></i>
-            </button>
-            <p id="voiceChatHint" class="text-white/60 text-sm">点击开始语音对话</p>
-        </div>
     </div>
 
     <script>
@@ -665,8 +658,6 @@
             audioLevelBars: document.getElementById('audioLevelBars'),
             voiceChatTranscript: document.getElementById('voiceChatTranscript'),
             voiceChatResponse: document.getElementById('voiceChatResponse'),
-            voiceChatToggleBtn: document.getElementById('voiceChatToggleBtn'),
-            voiceChatHint: document.getElementById('voiceChatHint'),
             // 移动端元素
             menuBtn: document.getElementById('menuBtn'),
             mobileSidebar: document.getElementById('mobileSidebar'),
@@ -3130,7 +3121,6 @@ ${conversationText}
             // Open voice chat modal
             elements.voiceChatBtn.onclick = openVoiceChat;
             elements.closeVoiceChatBtn.onclick = closeVoiceChat;
-            elements.voiceChatToggleBtn.onclick = toggleVoiceChatListening;
         }
 
         function openVoiceChat() {
@@ -3178,8 +3168,6 @@ ${conversationText}
             const statusEl = elements.voiceChatStatus;
             const iconEl = elements.voiceChatIcon;
             const pulseEl = elements.voicePulse;
-            const hintEl = elements.voiceChatHint;
-            const toggleBtn = elements.voiceChatToggleBtn;
             const bars = elements.audioLevelBars.querySelectorAll('.audio-bar');
 
             switch (status) {
@@ -3188,9 +3176,6 @@ ${conversationText}
                     iconEl.className = 'fas fa-microphone text-4xl text-white relative z-10';
                     pulseEl.classList.remove('animate-ping');
                     pulseEl.classList.add('hidden');
-                    hintEl.textContent = '点击开始语音对话';
-                    toggleBtn.innerHTML = '<i class="fas fa-microphone text-2xl"></i>';
-                    toggleBtn.className = 'w-20 h-20 rounded-full bg-purple-600 hover:bg-purple-700 active:bg-purple-800 text-white shadow-lg transition-all flex items-center justify-center';
                     bars.forEach(bar => bar.style.height = '8px');
                     break;
                 case 'calibrating':
@@ -3199,9 +3184,6 @@ ${conversationText}
                     pulseEl.classList.remove('hidden');
                     pulseEl.classList.remove('animate-ping');
                     pulseEl.classList.add('animate-pulse');
-                    hintEl.textContent = '请保持安静...';
-                    toggleBtn.innerHTML = '<i class="fas fa-stop text-2xl"></i>';
-                    toggleBtn.className = 'w-20 h-20 rounded-full bg-yellow-600 hover:bg-yellow-700 active:bg-yellow-800 text-white shadow-lg transition-all flex items-center justify-center';
                     break;
                 case 'listening':
                     statusEl.textContent = '正在聆听...';
@@ -3209,11 +3191,6 @@ ${conversationText}
                     pulseEl.classList.remove('hidden');
                     pulseEl.classList.remove('animate-pulse');
                     pulseEl.classList.add('animate-ping');
-                    hintEl.textContent = '说话中... 点击停止';
-                    toggleBtn.innerHTML = '<i class="fas fa-stop text-2xl"></i>';
-                    toggleBtn.className = 'w-20 h-20 rounded-full bg-red-600 hover:bg-red-700 active:bg-red-800 text-white shadow-lg transition-all flex items-center justify-center';
-                    toggleBtn.disabled = false;
-                    toggleBtn.classList.remove('opacity-50');
                     break;
                 case 'detecting':
                     statusEl.textContent = '检测到语音...';
@@ -3222,9 +3199,6 @@ ${conversationText}
                     statusEl.textContent = '识别语音中...';
                     iconEl.className = 'fas fa-spinner fa-spin text-4xl text-white relative z-10';
                     pulseEl.classList.add('hidden');
-                    hintEl.textContent = '请稍候...';
-                    toggleBtn.disabled = true;
-                    toggleBtn.classList.add('opacity-50');
                     break;
                 case 'processing_llm':
                     statusEl.textContent = 'AI 思考中...';
@@ -3233,14 +3207,11 @@ ${conversationText}
                 case 'playing_tts':
                     statusEl.textContent = 'AI 回复中...';
                     iconEl.className = 'fas fa-volume-up text-4xl text-white relative z-10';
-                    hintEl.textContent = '播放中...';
                     break;
                 case 'error':
                     statusEl.textContent = message || '发生错误';
                     iconEl.className = 'fas fa-exclamation-triangle text-4xl text-yellow-400 relative z-10';
                     pulseEl.classList.add('hidden');
-                    toggleBtn.disabled = false;
-                    toggleBtn.classList.remove('opacity-50');
                     setTimeout(() => updateVoiceChatUI('ready'), 2000);
                     break;
             }
