@@ -3362,7 +3362,8 @@ ${conversationText}
                 state.voiceChatSilenceTimer = null;
             }
 
-            // Stop recorder
+            // Stop recorder (onstop 回调会处理后续逻辑)
+            // 注意：不要在这里重置 voiceChatSpeechDetected，因为 onstop 回调需要用它
             if (state.voiceChatRecorder && state.voiceChatRecorder.state === 'recording') {
                 state.voiceChatRecorder.stop();
             }
@@ -3377,7 +3378,7 @@ ${conversationText}
             state.voiceChatVadActive = false;
             state.voiceChatAnalyser = null;
             state.voiceChatRecorder = null;
-            state.voiceChatSpeechDetected = false;
+            // voiceChatSpeechDetected 在 startVoiceChatListening 中重置
         }
 
         // VAD (Voice Activity Detection) Configuration
