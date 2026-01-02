@@ -3801,17 +3801,17 @@ ${conversationText}
                 await audioContext.resume();
             }
 
-            const response = await fetch('/api/tts-stream', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    text: text,
-                    appid: state.volcAppId,
-                    access_key: state.volcTtsAccessKey,
-                    cluster: state.volcTtsCluster,
-                    voice_type: voiceType
-                })
+            // 构建 GET 请求 URL（服务器端使用 GET 方法）
+            const params = new URLSearchParams({
+                text: text,
+                appid: state.volcAppId,
+                access_key: state.volcTtsAccessKey,
+                resource_id: state.volcTtsCluster, // 服务器使用 resource_id 参数名
+                voice_type: voiceType
             });
+            const url = `/api/tts-stream?${params.toString()}`;
+
+            const response = await fetch(url);
 
             if (!response.ok) {
                 throw new Error('TTS stream request failed');
