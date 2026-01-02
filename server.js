@@ -806,17 +806,34 @@ function parseResponse(data) {
     return { msgType, errorCode, payloadMsg };
 }
 
-function convertToPcm(inputPath) {
+function convertToPcm(inputPath, originalName) {
     return new Promise((resolve, reject) => {
-        const args = [
+        // 根据原始文件名确定输入格式
+        let inputFormat = null;
+        if (originalName) {
+            if (originalName.includes('webm')) {
+                inputFormat = 'webm';
+            } else if (originalName.includes('mp4') || originalName.includes('m4a')) {
+                inputFormat = 'mp4';
+            } else if (originalName.includes('ogg')) {
+                inputFormat = 'ogg';
+            }
+        }
+
+        const args = [];
+        // 如果能确定格式，明确告诉 FFmpeg
+        if (inputFormat) {
+            args.push('-f', inputFormat);
+        }
+        args.push(
             '-i', inputPath,
             '-acodec', 'pcm_s16le',
             '-ac', '1',
             '-ar', '16000',
             '-f', 's16le',
             '-'
-        ];
-        
+        );
+
         execFile(ffmpegPath, args, { encoding: 'buffer', maxBuffer: 50 * 1024 * 1024 }, (error, stdout, stderr) => {
             if (error) {
                 console.error('FFmpeg error:', stderr.toString());
@@ -845,12 +862,13 @@ app.post('/api/asr', upload.single('audio'), async (req, res) => {
 
     console.log(`[ASR-Server] ========== 开始ASR处理 ==========`);
     console.log(`[ASR-Server] 接收文件大小: ${(audioFile.size / 1024).toFixed(2)} KB`);
+    console.log(`[ASR-Server] 原始文件名: ${audioFile.originalname}`);
 
     let ws = null;
     try {
         // 1. Convert audio to required format (PCM s16le, 16k, 1ch)
         const ffmpegStartTime = Date.now();
-        const pcmBuffer = await convertToPcm(audioFile.path);
+        const pcmBuffer = await convertToPcm(audioFile.path, audioFile.originalname);
         timing.ffmpegConvert = Date.now() - ffmpegStartTime;
         console.log(`[ASR-Server] FFmpeg转换耗时: ${timing.ffmpegConvert} ms, PCM大小: ${(pcmBuffer.length / 1024).toFixed(2)} KB`);
 
