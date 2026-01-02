@@ -3161,7 +3161,9 @@ ${conversationText}
 
             elements.voiceChatModal.classList.remove('hidden');
             state.voiceChatActive = true;
-            updateVoiceChatUI('ready');
+
+            // 自动开始监听，无需用户再次点击
+            startVoiceChatListening();
         }
 
         function closeVoiceChat() {
@@ -3304,7 +3306,9 @@ ${conversationText}
                 state.voiceChatAudioChunks = [];
 
                 recorder.ondataavailable = (event) => {
-                    if (event.data.size > 0) {
+                    // 只在 VAD 检测到语音活动时才收集音频数据
+                    // 这样可以过滤掉用户开口前的静音部分
+                    if (event.data.size > 0 && state.voiceChatVadActive) {
                         state.voiceChatAudioChunks.push(event.data);
                     }
                 };
