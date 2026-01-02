@@ -952,6 +952,7 @@ app.post('/api/asr', upload.single('audio'), async (req, res) => {
         let offset = 0;
         let finalResultText = '';
         let seq = 1;
+        let receivedFinalResult = false;  // 标记是否已收到最终结果
 
         // 切分音频数据
         const chunks = [];
@@ -996,38 +997,47 @@ app.post('/api/asr', upload.single('audio'), async (req, res) => {
                 if (result.text && !finalResultText) {
                     finalResultText = result.text;
                 }
+
+                // 检查是否已收到最终结果 (sequence < 0 表示最后一个响应)
+                if (result.sequence < 0) {
+                    receivedFinalResult = true;
+                    console.log(`[ASR-Server] 在音频块阶段已收到最终结果`);
+                    break;
+                }
             }
         }
         timing.audioChunksSend = Date.now() - audioChunksStartTime;
         console.log(`[ASR-Server] 音频块发送+响应耗时: ${timing.audioChunksSend} ms`);
 
-        // 等待最终识别结果
+        // 只有在未收到最终结果时才等待
         const finalWaitStartTime = Date.now();
         let waitCount = 0;
         const MAX_WAIT = 10;
 
-        while (waitCount < MAX_WAIT) {
-            try {
-                const finalResponse = await waitForMessage(ws, 5000);
-                waitCount++;
+        if (!receivedFinalResult) {
+            while (waitCount < MAX_WAIT) {
+                try {
+                    const finalResponse = await waitForMessage(ws, 5000);
+                    waitCount++;
 
-                if (finalResponse?.payloadMsg) {
-                    const result = finalResponse.payloadMsg;
+                    if (finalResponse?.payloadMsg) {
+                        const result = finalResponse.payloadMsg;
 
-                    if (result.result && Array.isArray(result.result) && result.result.length > 0) {
-                        finalResultText = result.result[0].text || finalResultText;
+                        if (result.result && Array.isArray(result.result) && result.result.length > 0) {
+                            finalResultText = result.result[0].text || finalResultText;
+                        }
+
+                        if (result.sequence < 0) {
+                            break;
+                        }
                     }
-
-                    if (result.sequence < 0) {
-                        break;
-                    }
+                } catch (timeoutErr) {
+                    break;
                 }
-            } catch (timeoutErr) {
-                break;
             }
         }
         timing.finalWait = Date.now() - finalWaitStartTime;
-        console.log(`[ASR-Server] 等待最终结果耗时: ${timing.finalWait} ms, 等待次数: ${waitCount}`);
+        console.log(`[ASR-Server] 等待最终结果耗时: ${timing.finalWait} ms, 等待次数: ${waitCount}, 已在音频阶段完成: ${receivedFinalResult}`);
 
         ws.close();
         if (fs.existsSync(audioFile.path)) fs.unlinkSync(audioFile.path);

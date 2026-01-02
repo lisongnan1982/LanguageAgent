@@ -154,8 +154,11 @@
                         <h3 class="font-bold text-gray-800 truncate" id="activeRoleName">请选择角色</h3>
                         <p class="text-xs text-gray-500 truncate" id="activeRoleDesc">开始您的对话</p>
                     </div>
-                    <button id="playAllBtn" class="p-2 md:p-2 min-w-[44px] min-h-[44px] flex items-center justify-center text-gray-400 hover:text-green-500 active:text-green-600 transition-colors hidden" title="连续播放所有已缓存音频">
+                    <button id="playAllBtn" class="p-2 md:p-2 min-w-[44px] min-h-[44px] flex items-center justify-center text-gray-400 hover:text-green-500 active:text-green-600 transition-colors hidden" title="连续播放所有已缓存音频" style="display: none !important;">
                         <i class="fas fa-play-circle text-xl"></i>
+                    </button>
+                    <button id="voiceChatBtn" class="p-2 md:p-2 min-w-[44px] min-h-[44px] flex items-center justify-center text-gray-400 hover:text-purple-500 active:text-purple-600 transition-colors hidden" title="语音对话">
+                        <i class="fas fa-comments text-lg"></i>
                     </button>
                     <button id="downloadAllBtn" class="p-2 md:p-2 min-w-[44px] min-h-[44px] flex items-center justify-center text-gray-400 hover:text-blue-500 active:text-blue-600 transition-colors hidden" title="合并下载所有已缓存音频">
                         <i class="fas fa-download text-lg"></i>
@@ -421,6 +424,62 @@
         </div>
     </div>
 
+    <!-- Voice Chat Modal -->
+    <div id="voiceChatModal" class="fixed inset-0 bg-gradient-to-br from-purple-900 via-blue-900 to-indigo-900 hidden flex flex-col items-center justify-center z-[200]">
+        <div class="absolute top-4 right-4">
+            <button id="closeVoiceChatBtn" class="p-3 rounded-full bg-white/10 hover:bg-white/20 text-white transition-colors">
+                <i class="fas fa-times text-xl"></i>
+            </button>
+        </div>
+
+        <div class="flex flex-col items-center justify-center flex-1 w-full max-w-lg px-4">
+            <!-- Status Display -->
+            <div id="voiceChatStatus" class="text-white text-xl font-medium mb-8 text-center">
+                准备中...
+            </div>
+
+            <!-- Audio Visualizer -->
+            <div class="relative mb-8">
+                <div id="voiceVisualizer" class="w-32 h-32 rounded-full bg-white/10 flex items-center justify-center relative overflow-hidden">
+                    <!-- Pulse Animation -->
+                    <div id="voicePulse" class="absolute inset-0 rounded-full bg-purple-500/30 animate-ping"></div>
+                    <!-- Microphone Icon -->
+                    <i id="voiceChatIcon" class="fas fa-microphone text-4xl text-white relative z-10"></i>
+                </div>
+                <!-- Audio Level Bars -->
+                <div id="audioLevelBars" class="flex gap-1 justify-center mt-4 h-8">
+                    <div class="audio-bar w-1 bg-white/50 rounded-full transition-all duration-100" style="height: 8px;"></div>
+                    <div class="audio-bar w-1 bg-white/50 rounded-full transition-all duration-100" style="height: 12px;"></div>
+                    <div class="audio-bar w-1 bg-white/50 rounded-full transition-all duration-100" style="height: 16px;"></div>
+                    <div class="audio-bar w-1 bg-white/50 rounded-full transition-all duration-100" style="height: 20px;"></div>
+                    <div class="audio-bar w-1 bg-white/50 rounded-full transition-all duration-100" style="height: 24px;"></div>
+                    <div class="audio-bar w-1 bg-white/50 rounded-full transition-all duration-100" style="height: 20px;"></div>
+                    <div class="audio-bar w-1 bg-white/50 rounded-full transition-all duration-100" style="height: 16px;"></div>
+                    <div class="audio-bar w-1 bg-white/50 rounded-full transition-all duration-100" style="height: 12px;"></div>
+                    <div class="audio-bar w-1 bg-white/50 rounded-full transition-all duration-100" style="height: 8px;"></div>
+                </div>
+            </div>
+
+            <!-- Current Transcript -->
+            <div id="voiceChatTranscript" class="text-white/80 text-center max-h-40 overflow-y-auto mb-4 px-4 w-full">
+                <p class="text-sm text-white/50">点击下方按钮开始对话</p>
+            </div>
+
+            <!-- AI Response -->
+            <div id="voiceChatResponse" class="text-white text-center max-h-32 overflow-y-auto mb-8 px-4 w-full hidden">
+                <p class="text-lg"></p>
+            </div>
+        </div>
+
+        <!-- Bottom Controls -->
+        <div class="pb-8 flex flex-col items-center gap-4">
+            <button id="voiceChatToggleBtn" class="w-20 h-20 rounded-full bg-purple-600 hover:bg-purple-700 active:bg-purple-800 text-white shadow-lg transition-all flex items-center justify-center">
+                <i class="fas fa-microphone text-2xl"></i>
+            </button>
+            <p id="voiceChatHint" class="text-white/60 text-sm">点击开始语音对话</p>
+        </div>
+    </div>
+
     <script>
         // State Management
         const state = {
@@ -465,7 +524,17 @@
             isPlayingAll: false, // Track if continuous playback is active
             playAllQueue: [], // Queue for continuous playback
             editingRoleId: null, // Track which role is being edited (null = create mode)
-            audioContext: null // Web Audio API Context
+            audioContext: null, // Web Audio API Context
+            // Voice Chat State
+            voiceChatActive: false, // Whether voice chat mode is active
+            voiceChatListening: false, // Whether currently listening for voice
+            voiceChatMediaStream: null, // MediaStream for voice chat
+            voiceChatAnalyser: null, // AnalyserNode for audio level detection
+            voiceChatRecorder: null, // MediaRecorder for capturing audio
+            voiceChatAudioChunks: [], // Audio chunks being recorded
+            voiceChatSilenceTimer: null, // Timer for silence detection
+            voiceChatVadActive: false, // Voice Activity Detection state
+            voiceChatProcessing: false // Whether processing ASR/LLM/TTS
         };
 
         // Audio Helpers
@@ -584,6 +653,19 @@
             playAllBtn: document.getElementById('playAllBtn'),
             downloadAllBtn: document.getElementById('downloadAllBtn'),
             compressHistoryBtn: document.getElementById('compressHistoryBtn'),
+            // 语音对话元素
+            voiceChatBtn: document.getElementById('voiceChatBtn'),
+            voiceChatModal: document.getElementById('voiceChatModal'),
+            closeVoiceChatBtn: document.getElementById('closeVoiceChatBtn'),
+            voiceChatStatus: document.getElementById('voiceChatStatus'),
+            voiceVisualizer: document.getElementById('voiceVisualizer'),
+            voicePulse: document.getElementById('voicePulse'),
+            voiceChatIcon: document.getElementById('voiceChatIcon'),
+            audioLevelBars: document.getElementById('audioLevelBars'),
+            voiceChatTranscript: document.getElementById('voiceChatTranscript'),
+            voiceChatResponse: document.getElementById('voiceChatResponse'),
+            voiceChatToggleBtn: document.getElementById('voiceChatToggleBtn'),
+            voiceChatHint: document.getElementById('voiceChatHint'),
             // 移动端元素
             menuBtn: document.getElementById('menuBtn'),
             mobileSidebar: document.getElementById('mobileSidebar'),
@@ -849,6 +931,7 @@
             elements.compressHistoryBtn.onclick = compressConversationHistory;
 
             setupPlayAllButton();
+            setupVoiceChat();
 
             // Voice Recognition Logic
             let mediaRecorder;
@@ -1471,6 +1554,7 @@ Respond ONLY with the JSON object. Do not include markdown code blocks.`;
             elements.playAllBtn.classList.remove('hidden');
             elements.downloadAllBtn.classList.remove('hidden');
             elements.compressHistoryBtn.classList.remove('hidden');
+            elements.voiceChatBtn.classList.remove('hidden');
 
             renderRoles();
             renderMessages();
@@ -3037,6 +3121,782 @@ ${conversationText}
                     }
                 }
             }
+        }
+
+        // ========== Voice Chat Functions ==========
+
+        function setupVoiceChat() {
+            // Open voice chat modal
+            elements.voiceChatBtn.onclick = openVoiceChat;
+            elements.closeVoiceChatBtn.onclick = closeVoiceChat;
+            elements.voiceChatToggleBtn.onclick = toggleVoiceChatListening;
+        }
+
+        function openVoiceChat() {
+            if (!state.currentRoleId) {
+                alert('请先选择一个角色');
+                return;
+            }
+
+            // Check required settings
+            if (!state.apiKey) {
+                alert('请先在设置中配置 API Key');
+                return;
+            }
+            if (!state.volcAppId || !state.volcToken) {
+                alert('请先在设置中配置火山引擎 ASR 参数');
+                return;
+            }
+            if (state.volcTtsMode === 'stream') {
+                if (!state.volcTtsAccessKey || !state.volcTtsCluster) {
+                    alert('请先在设置中配置火山引擎 TTS 参数 (Access Key 和 Resource ID)');
+                    return;
+                }
+            } else {
+                if (!state.volcTtsToken) {
+                    alert('请先在设置中配置火山引擎 TTS 参数 (Access Token)');
+                    return;
+                }
+            }
+
+            elements.voiceChatModal.classList.remove('hidden');
+            state.voiceChatActive = true;
+            updateVoiceChatUI('ready');
+        }
+
+        function closeVoiceChat() {
+            stopVoiceChatListening();
+            elements.voiceChatModal.classList.add('hidden');
+            state.voiceChatActive = false;
+            state.voiceChatProcessing = false;
+        }
+
+        function updateVoiceChatUI(status, message = '') {
+            const statusEl = elements.voiceChatStatus;
+            const iconEl = elements.voiceChatIcon;
+            const pulseEl = elements.voicePulse;
+            const hintEl = elements.voiceChatHint;
+            const toggleBtn = elements.voiceChatToggleBtn;
+            const bars = elements.audioLevelBars.querySelectorAll('.audio-bar');
+
+            switch (status) {
+                case 'ready':
+                    statusEl.textContent = '准备就绪';
+                    iconEl.className = 'fas fa-microphone text-4xl text-white relative z-10';
+                    pulseEl.classList.remove('animate-ping');
+                    pulseEl.classList.add('hidden');
+                    hintEl.textContent = '点击开始语音对话';
+                    toggleBtn.innerHTML = '<i class="fas fa-microphone text-2xl"></i>';
+                    toggleBtn.className = 'w-20 h-20 rounded-full bg-purple-600 hover:bg-purple-700 active:bg-purple-800 text-white shadow-lg transition-all flex items-center justify-center';
+                    bars.forEach(bar => bar.style.height = '8px');
+                    break;
+                case 'calibrating':
+                    statusEl.textContent = '环境噪声校准中...';
+                    iconEl.className = 'fas fa-wave-square text-4xl text-white relative z-10';
+                    pulseEl.classList.remove('hidden');
+                    pulseEl.classList.remove('animate-ping');
+                    pulseEl.classList.add('animate-pulse');
+                    hintEl.textContent = '请保持安静...';
+                    toggleBtn.innerHTML = '<i class="fas fa-stop text-2xl"></i>';
+                    toggleBtn.className = 'w-20 h-20 rounded-full bg-yellow-600 hover:bg-yellow-700 active:bg-yellow-800 text-white shadow-lg transition-all flex items-center justify-center';
+                    break;
+                case 'listening':
+                    statusEl.textContent = '正在聆听...';
+                    iconEl.className = 'fas fa-microphone text-4xl text-white relative z-10';
+                    pulseEl.classList.remove('hidden');
+                    pulseEl.classList.remove('animate-pulse');
+                    pulseEl.classList.add('animate-ping');
+                    hintEl.textContent = '说话中... 点击停止';
+                    toggleBtn.innerHTML = '<i class="fas fa-stop text-2xl"></i>';
+                    toggleBtn.className = 'w-20 h-20 rounded-full bg-red-600 hover:bg-red-700 active:bg-red-800 text-white shadow-lg transition-all flex items-center justify-center';
+                    toggleBtn.disabled = false;
+                    toggleBtn.classList.remove('opacity-50');
+                    break;
+                case 'detecting':
+                    statusEl.textContent = '检测到语音...';
+                    break;
+                case 'processing_asr':
+                    statusEl.textContent = '识别语音中...';
+                    iconEl.className = 'fas fa-spinner fa-spin text-4xl text-white relative z-10';
+                    pulseEl.classList.add('hidden');
+                    hintEl.textContent = '请稍候...';
+                    toggleBtn.disabled = true;
+                    toggleBtn.classList.add('opacity-50');
+                    break;
+                case 'processing_llm':
+                    statusEl.textContent = 'AI 思考中...';
+                    iconEl.className = 'fas fa-brain text-4xl text-white relative z-10';
+                    break;
+                case 'playing_tts':
+                    statusEl.textContent = 'AI 回复中...';
+                    iconEl.className = 'fas fa-volume-up text-4xl text-white relative z-10';
+                    hintEl.textContent = '播放中...';
+                    break;
+                case 'error':
+                    statusEl.textContent = message || '发生错误';
+                    iconEl.className = 'fas fa-exclamation-triangle text-4xl text-yellow-400 relative z-10';
+                    pulseEl.classList.add('hidden');
+                    toggleBtn.disabled = false;
+                    toggleBtn.classList.remove('opacity-50');
+                    setTimeout(() => updateVoiceChatUI('ready'), 2000);
+                    break;
+            }
+        }
+
+        function updateAudioLevelBars(level) {
+            const bars = elements.audioLevelBars.querySelectorAll('.audio-bar');
+            const normalizedLevel = Math.min(1, Math.max(0, level));
+
+            bars.forEach((bar, index) => {
+                const centerIndex = Math.floor(bars.length / 2);
+                const distanceFromCenter = Math.abs(index - centerIndex);
+                const factor = 1 - (distanceFromCenter / centerIndex) * 0.5;
+                const height = 8 + normalizedLevel * 24 * factor;
+                bar.style.height = `${height}px`;
+            });
+        }
+
+        async function toggleVoiceChatListening() {
+            if (state.voiceChatProcessing) return;
+
+            if (state.voiceChatListening) {
+                stopVoiceChatListening();
+                updateVoiceChatUI('ready');
+            } else {
+                await startVoiceChatListening();
+            }
+        }
+
+        async function startVoiceChatListening() {
+            try {
+                // Get audio stream with noise suppression
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    audio: {
+                        echoCancellation: true,
+                        noiseSuppression: true,
+                        autoGainControl: true,
+                        sampleRate: 16000
+                    }
+                });
+
+                state.voiceChatMediaStream = stream;
+                state.voiceChatListening = true;
+                updateVoiceChatUI('listening');
+
+                // Setup AudioContext and Analyser for VAD
+                const audioContext = getAudioContext();
+                if (audioContext.state === 'suspended') {
+                    await audioContext.resume();
+                }
+
+                const source = audioContext.createMediaStreamSource(stream);
+                const analyser = audioContext.createAnalyser();
+                analyser.fftSize = 512;
+                analyser.smoothingTimeConstant = 0.8;
+                source.connect(analyser);
+                state.voiceChatAnalyser = analyser;
+
+                // Setup MediaRecorder
+                const mimeType = getSupportedMimeTypeForVoiceChat();
+                const options = mimeType ? { mimeType } : {};
+                const recorder = new MediaRecorder(stream, options);
+                state.voiceChatRecorder = recorder;
+                state.voiceChatAudioChunks = [];
+
+                recorder.ondataavailable = (event) => {
+                    if (event.data.size > 0) {
+                        state.voiceChatAudioChunks.push(event.data);
+                    }
+                };
+
+                recorder.onstop = async () => {
+                    if (state.voiceChatAudioChunks.length > 0 && state.voiceChatActive) {
+                        const audioBlob = new Blob(state.voiceChatAudioChunks, { type: recorder.mimeType || mimeType || 'audio/webm' });
+                        if (audioBlob.size > 1000) {
+                            await processVoiceChatAudio(audioBlob);
+                        }
+                    }
+                };
+
+                // Start recording
+                recorder.start(100);
+
+                // Start VAD monitoring
+                startVADMonitoring();
+
+            } catch (err) {
+                console.error('Voice chat error:', err);
+                updateVoiceChatUI('error', '无法访问麦克风');
+            }
+        }
+
+        function getSupportedMimeTypeForVoiceChat() {
+            const types = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg;codecs=opus'];
+            for (const type of types) {
+                if (MediaRecorder.isTypeSupported(type)) return type;
+            }
+            return '';
+        }
+
+        function stopVoiceChatListening() {
+            // Clear silence timer
+            if (state.voiceChatSilenceTimer) {
+                clearTimeout(state.voiceChatSilenceTimer);
+                state.voiceChatSilenceTimer = null;
+            }
+
+            // Stop recorder
+            if (state.voiceChatRecorder && state.voiceChatRecorder.state === 'recording') {
+                state.voiceChatRecorder.stop();
+            }
+
+            // Stop media stream
+            if (state.voiceChatMediaStream) {
+                state.voiceChatMediaStream.getTracks().forEach(track => track.stop());
+                state.voiceChatMediaStream = null;
+            }
+
+            state.voiceChatListening = false;
+            state.voiceChatVadActive = false;
+            state.voiceChatAnalyser = null;
+            state.voiceChatRecorder = null;
+        }
+
+        // VAD (Voice Activity Detection) Configuration
+        let vadAnimationFrame = null;
+        let silenceStartTime = null;
+        let speechStartTime = null;
+
+        // VAD Parameters - optimized for noisy environments
+        const VAD_CONFIG = {
+            CALIBRATION_DURATION: 2000,    // 2 seconds to calibrate noise floor
+            NOISE_MULTIPLIER: 3.5,         // Speech must be 3.5x louder than noise (increased)
+            MIN_SPEECH_THRESHOLD: 0.08,    // Higher minimum threshold to reduce false positives
+            MAX_SPEECH_THRESHOLD: 0.25,    // Higher maximum threshold for noisy environments
+            SILENCE_DURATION: 1200,        // 1.2 seconds of silence to end recording
+            SPEECH_MIN_DURATION: 400,      // Minimum 400ms of speech to process
+            CONSECUTIVE_FRAMES_REQUIRED: 8, // Need 8 consecutive frames above threshold (increased)
+            SPEECH_FREQUENCY_MIN: 200,     // Focus on speech fundamental frequencies (200Hz+)
+            SPEECH_FREQUENCY_MAX: 2500,    // Narrower band for cleaner speech detection
+            // New parameters for improved VAD
+            NOISE_ADAPTATION_RATE: 0.02,   // How fast to adapt to changing noise
+            ENERGY_SMOOTHING: 0.3,         // Smooth energy readings to reduce jitter
+            ZCR_SPEECH_MIN: 0.02,          // Min zero-crossing rate for speech
+            ZCR_SPEECH_MAX: 0.25,          // Max zero-crossing rate for speech
+            SPECTRAL_FLATNESS_MAX: 0.5,    // Max spectral flatness (speech is less flat than noise)
+            HANGOVER_FRAMES: 15            // Keep speech active for extra frames after drop
+        };
+
+        let noiseFloor = 0;
+        let isCalibrating = false;
+        let calibrationSamples = [];
+        let consecutiveSpeechFrames = 0;
+        let consecutiveSilenceFrames = 0;
+        let smoothedEnergy = 0;
+        let hangoverCounter = 0;
+        let noiseFloorHistory = [];
+
+        // Calculate spectral flatness (noise tends to have higher flatness than speech)
+        function calculateSpectralFlatness(dataArray, minBin, maxBin) {
+            let logSum = 0;
+            let arithmeticSum = 0;
+            let count = 0;
+
+            for (let i = minBin; i < maxBin; i++) {
+                const value = Math.max(dataArray[i], 1); // Avoid log(0)
+                logSum += Math.log(value);
+                arithmeticSum += value;
+                count++;
+            }
+
+            if (count === 0 || arithmeticSum === 0) return 1;
+
+            const geometricMean = Math.exp(logSum / count);
+            const arithmeticMean = arithmeticSum / count;
+
+            return geometricMean / arithmeticMean;
+        }
+
+        // Calculate spectral centroid (speech tends to have specific centroid range)
+        function calculateSpectralCentroid(dataArray, minBin, maxBin, binSize) {
+            let weightedSum = 0;
+            let sum = 0;
+
+            for (let i = minBin; i < maxBin; i++) {
+                const frequency = i * binSize;
+                weightedSum += frequency * dataArray[i];
+                sum += dataArray[i];
+            }
+
+            return sum > 0 ? weightedSum / sum : 0;
+        }
+
+        function startVADMonitoring() {
+            const analyser = state.voiceChatAnalyser;
+            if (!analyser) return;
+
+            const dataArray = new Uint8Array(analyser.frequencyBinCount);
+            silenceStartTime = null;
+            speechStartTime = null;
+            consecutiveSpeechFrames = 0;
+            consecutiveSilenceFrames = 0;
+            smoothedEnergy = 0;
+            hangoverCounter = 0;
+            noiseFloorHistory = [];
+
+            // Start calibration phase
+            isCalibrating = true;
+            calibrationSamples = [];
+            const calibrationStartTime = Date.now();
+
+            updateVoiceChatUI('calibrating');
+            elements.voiceChatStatus.textContent = '环境噪声校准中...';
+
+            function checkAudioLevel() {
+                if (!state.voiceChatListening || !state.voiceChatAnalyser) {
+                    cancelAnimationFrame(vadAnimationFrame);
+                    return;
+                }
+
+                analyser.getByteFrequencyData(dataArray);
+
+                // Calculate frequency analysis parameters
+                const sampleRate = 48000;
+                const binSize = sampleRate / analyser.fftSize;
+                const minBin = Math.floor(VAD_CONFIG.SPEECH_FREQUENCY_MIN / binSize);
+                const maxBin = Math.min(Math.ceil(VAD_CONFIG.SPEECH_FREQUENCY_MAX / binSize), dataArray.length);
+
+                // Calculate energy in speech frequency band
+                let sum = 0;
+                let count = 0;
+                let peakValue = 0;
+                for (let i = minBin; i < maxBin; i++) {
+                    sum += dataArray[i];
+                    count++;
+                    if (dataArray[i] > peakValue) peakValue = dataArray[i];
+                }
+                const rawEnergy = count > 0 ? (sum / count / 255) : 0;
+
+                // Apply smoothing to reduce jitter from transient noises
+                smoothedEnergy = smoothedEnergy * (1 - VAD_CONFIG.ENERGY_SMOOTHING) + rawEnergy * VAD_CONFIG.ENERGY_SMOOTHING;
+
+                // Calculate spectral features for better speech/noise discrimination
+                const spectralFlatness = calculateSpectralFlatness(dataArray, minBin, maxBin);
+                const spectralCentroid = calculateSpectralCentroid(dataArray, minBin, maxBin, binSize);
+
+                // Speech typically has centroid between 300-1500 Hz
+                const isCentroidInSpeechRange = spectralCentroid >= 300 && spectralCentroid <= 1500;
+                // Speech has lower spectral flatness than noise
+                const isSpectralPatternSpeechLike = spectralFlatness < VAD_CONFIG.SPECTRAL_FLATNESS_MAX;
+
+                // Update visual feedback
+                updateAudioLevelBars(smoothedEnergy);
+
+                // Calibration phase
+                if (isCalibrating) {
+                    calibrationSamples.push(rawEnergy);
+
+                    if (Date.now() - calibrationStartTime >= VAD_CONFIG.CALIBRATION_DURATION) {
+                        // Use median instead of average for robustness
+                        const sorted = [...calibrationSamples].sort((a, b) => a - b);
+                        const medianNoise = sorted[Math.floor(sorted.length / 2)];
+                        // Use 75th percentile for safety margin
+                        const percentile75 = sorted[Math.floor(sorted.length * 0.75)];
+                        noiseFloor = Math.max(medianNoise, percentile75 * 0.8);
+
+                        // Initialize noise floor history for adaptive tracking
+                        noiseFloorHistory = [noiseFloor, noiseFloor, noiseFloor];
+
+                        isCalibrating = false;
+                        calibrationSamples = [];
+
+                        console.log(`[VAD] Calibration complete. Noise floor: ${noiseFloor.toFixed(4)}, Spectral reference captured`);
+                        updateVoiceChatUI('listening');
+                    }
+
+                    vadAnimationFrame = requestAnimationFrame(checkAudioLevel);
+                    return;
+                }
+
+                // Adaptive noise floor update during silence
+                if (!state.voiceChatVadActive && consecutiveSilenceFrames > 30) {
+                    // Slowly adapt noise floor to changing environment
+                    const adaptedNoise = noiseFloor * (1 - VAD_CONFIG.NOISE_ADAPTATION_RATE) +
+                                        rawEnergy * VAD_CONFIG.NOISE_ADAPTATION_RATE;
+                    // Only update if noise is decreasing or slightly increasing
+                    if (adaptedNoise < noiseFloor * 1.2) {
+                        noiseFloor = adaptedNoise;
+                        noiseFloorHistory.push(noiseFloor);
+                        if (noiseFloorHistory.length > 10) noiseFloorHistory.shift();
+                    }
+                }
+
+                // Calculate dynamic threshold based on noise floor
+                const dynamicThreshold = Math.min(
+                    Math.max(noiseFloor * VAD_CONFIG.NOISE_MULTIPLIER, VAD_CONFIG.MIN_SPEECH_THRESHOLD),
+                    VAD_CONFIG.MAX_SPEECH_THRESHOLD
+                );
+
+                // Multi-factor speech detection
+                const isEnergyAboveThreshold = smoothedEnergy > dynamicThreshold;
+                const hasPeakEnergy = (peakValue / 255) > dynamicThreshold * 1.5;
+
+                // Combined detection: energy + spectral characteristics
+                const isSpeechLikely = isEnergyAboveThreshold &&
+                                       (isSpectralPatternSpeechLike || isCentroidInSpeechRange) &&
+                                       hasPeakEnergy;
+
+                if (isSpeechLikely) {
+                    consecutiveSpeechFrames++;
+                    consecutiveSilenceFrames = 0;
+                    hangoverCounter = VAD_CONFIG.HANGOVER_FRAMES;
+
+                    // Require consecutive frames to confirm speech
+                    if (consecutiveSpeechFrames >= VAD_CONFIG.CONSECUTIVE_FRAMES_REQUIRED) {
+                        if (!state.voiceChatVadActive) {
+                            state.voiceChatVadActive = true;
+                            speechStartTime = Date.now();
+                            console.log(`[VAD] Speech detected. Threshold: ${dynamicThreshold.toFixed(4)}, Energy: ${smoothedEnergy.toFixed(4)}, Flatness: ${spectralFlatness.toFixed(3)}, Centroid: ${spectralCentroid.toFixed(0)}Hz`);
+                            updateVoiceChatUI('detecting');
+                        }
+                        silenceStartTime = null;
+                    }
+                } else {
+                    // Apply hangover to prevent cutting off speech during brief pauses
+                    if (hangoverCounter > 0) {
+                        hangoverCounter--;
+                        // Don't increment silence frames during hangover
+                    } else {
+                        consecutiveSilenceFrames++;
+                        consecutiveSpeechFrames = 0;
+                    }
+
+                    if (state.voiceChatVadActive && consecutiveSilenceFrames >= VAD_CONFIG.CONSECUTIVE_FRAMES_REQUIRED && hangoverCounter === 0) {
+                        // Silence detected after speech
+                        if (!silenceStartTime) {
+                            silenceStartTime = Date.now();
+                        } else if (Date.now() - silenceStartTime > VAD_CONFIG.SILENCE_DURATION) {
+                            // Silence long enough - process the audio
+                            const speechDuration = speechStartTime ? Date.now() - speechStartTime : 0;
+                            if (speechDuration > VAD_CONFIG.SPEECH_MIN_DURATION) {
+                                console.log(`[VAD] Speech ended. Duration: ${speechDuration}ms`);
+                                stopVoiceChatListening();
+                                return;
+                            } else {
+                                // Too short, reset
+                                console.log(`[VAD] Speech too short (${speechDuration}ms), resetting`);
+                                state.voiceChatVadActive = false;
+                                silenceStartTime = null;
+                                speechStartTime = null;
+                                updateVoiceChatUI('listening');
+                            }
+                        }
+                    }
+                }
+
+                vadAnimationFrame = requestAnimationFrame(checkAudioLevel);
+            }
+
+            vadAnimationFrame = requestAnimationFrame(checkAudioLevel);
+        }
+
+        async function processVoiceChatAudio(audioBlob) {
+            state.voiceChatProcessing = true;
+            updateVoiceChatUI('processing_asr');
+
+            try {
+                // Step 1: ASR
+                const asrText = await performASR(audioBlob);
+                if (!asrText) {
+                    updateVoiceChatUI('error', '无法识别语音');
+                    state.voiceChatProcessing = false;
+                    setTimeout(() => {
+                        if (state.voiceChatActive) startVoiceChatListening();
+                    }, 1000);
+                    return;
+                }
+
+                // Show transcript
+                elements.voiceChatTranscript.innerHTML = `<p class="text-base text-white">"${asrText}"</p>`;
+
+                // Step 2: LLM
+                updateVoiceChatUI('processing_llm');
+                const llmResponse = await performLLMChat(asrText);
+                if (!llmResponse) {
+                    updateVoiceChatUI('error', 'AI 无法回复');
+                    state.voiceChatProcessing = false;
+                    setTimeout(() => {
+                        if (state.voiceChatActive) startVoiceChatListening();
+                    }, 1000);
+                    return;
+                }
+
+                // Show response
+                elements.voiceChatResponse.classList.remove('hidden');
+                elements.voiceChatResponse.innerHTML = `<p class="text-lg">${llmResponse}</p>`;
+
+                // Step 3: TTS
+                updateVoiceChatUI('playing_tts');
+                await performTTS(llmResponse);
+
+                // Step 4: Continue listening
+                state.voiceChatProcessing = false;
+                if (state.voiceChatActive) {
+                    await startVoiceChatListening();
+                }
+
+            } catch (err) {
+                console.error('Voice chat processing error:', err);
+                updateVoiceChatUI('error', err.message || '处理失败');
+                state.voiceChatProcessing = false;
+                setTimeout(() => {
+                    if (state.voiceChatActive) startVoiceChatListening();
+                }, 2000);
+            }
+        }
+
+        async function performASR(audioBlob) {
+            const formData = new FormData();
+            const ext = audioBlob.type.includes('mp4') ? 'mp4' : audioBlob.type.includes('webm') ? 'webm' : 'audio';
+            formData.append('audio', audioBlob, `recording.${ext}`);
+            formData.append('appid', state.volcAppId);
+            formData.append('token', state.volcToken);
+            formData.append('cluster', state.volcCluster);
+
+            const resp = await fetch('/api/asr', {
+                method: 'POST',
+                body: formData
+            });
+
+            const data = await resp.json();
+            return data.text || null;
+        }
+
+        async function performLLMChat(userMessage) {
+            const role = state.roles.find(r => r.id === state.currentRoleId);
+            if (!role) return null;
+
+            // Add to chat history
+            if (!state.chatHistory[state.currentRoleId]) {
+                state.chatHistory[state.currentRoleId] = [];
+            }
+            state.chatHistory[state.currentRoleId].push({ role: 'user', content: userMessage });
+
+            // Prepare messages for API
+            const formatInstruction = '\n\n【格式要求】请使用纯文本回复，禁止使用任何 markdown 格式。回复要简洁适合语音对话。';
+            const historyMessages = state.chatHistory[state.currentRoleId].filter(m => m.content !== '...');
+            const compressedSummary = historyMessages.find(m => m.isCompressed && m.role === 'system');
+            const regularMessages = historyMessages.filter(m => !m.isCompressed);
+
+            let systemPrompt = role.prompt + formatInstruction;
+            if (compressedSummary) {
+                systemPrompt += '\n\n【之前对话摘要】\n' + compressedSummary.content;
+            }
+
+            const apiMessages = [
+                { role: 'system', content: systemPrompt },
+                ...regularMessages.map(m => ({ role: m.role, content: m.content }))
+            ];
+
+            const response = await fetch('/api/proxy-llm', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    apiKey: state.apiKey,
+                    model: state.chatModel,
+                    messages: apiMessages
+                })
+            });
+
+            if (!response.ok) {
+                throw new Error('LLM API 请求失败');
+            }
+
+            const data = await response.json();
+            const assistantMessage = data.choices?.[0]?.message?.content || null;
+
+            if (assistantMessage) {
+                state.chatHistory[state.currentRoleId].push({ role: 'assistant', content: assistantMessage });
+                saveChatHistory();
+                renderMessages();
+            }
+
+            return assistantMessage;
+        }
+
+        async function performTTS(text) {
+            const voiceType = state.volcTtsVoice || 'zh_female_vv_uranus_bigtts';
+            const cleanedText = cleanTextForTts(text);
+
+            return new Promise(async (resolve, reject) => {
+                try {
+                    if (state.volcTtsMode === 'stream') {
+                        // Use streaming TTS
+                        await playVoiceChatTtsStream(cleanedText, voiceType, resolve);
+                    } else {
+                        // Use normal TTS
+                        await playVoiceChatTtsNormal(cleanedText, voiceType, resolve);
+                    }
+                } catch (err) {
+                    console.error('TTS error:', err);
+                    resolve(); // Continue even if TTS fails
+                }
+            });
+        }
+
+        async function playVoiceChatTtsNormal(text, voiceType, onComplete) {
+            const cacheKey = text + '_' + voiceType;
+
+            // Check cache
+            if (state.ttsCache[cacheKey]) {
+                const cachedData = state.ttsCache[cacheKey];
+                await playAudioFromCache(cachedData, onComplete);
+                return;
+            }
+
+            // Fetch TTS
+            const response = await fetch('/api/tts', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    text: text,
+                    appid: state.volcAppId,
+                    token: state.volcTtsToken,
+                    cluster: state.volcTtsCluster,
+                    voice_type: voiceType
+                })
+            });
+
+            const data = await response.json();
+            if (data.audio) {
+                state.ttsCache[cacheKey] = { data: data.audio, format: 'mp3' };
+                await playAudioFromCache({ data: data.audio, format: 'mp3' }, onComplete);
+            } else {
+                onComplete();
+            }
+        }
+
+        async function playVoiceChatTtsStream(text, voiceType, onComplete) {
+            const audioContext = getAudioContext();
+            if (audioContext.state === 'suspended') {
+                await audioContext.resume();
+            }
+
+            const response = await fetch('/api/tts-stream', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    text: text,
+                    appid: state.volcAppId,
+                    access_key: state.volcTtsAccessKey,
+                    cluster: state.volcTtsCluster,
+                    voice_type: voiceType
+                })
+            });
+
+            if (!response.ok) {
+                throw new Error('TTS stream request failed');
+            }
+
+            const reader = response.body.getReader();
+            const sampleRate = 24000;
+            let audioQueue = [];
+            let isPlaying = false;
+            let nextPlayTime = audioContext.currentTime;
+            let allReceived = false;
+
+            async function playNextChunk() {
+                if (audioQueue.length === 0) {
+                    if (allReceived) {
+                        onComplete();
+                    }
+                    return;
+                }
+
+                isPlaying = true;
+                const chunk = audioQueue.shift();
+
+                const audioBuffer = audioContext.createBuffer(1, chunk.length, sampleRate);
+                audioBuffer.getChannelData(0).set(chunk);
+
+                const source = audioContext.createBufferSource();
+                source.buffer = audioBuffer;
+                source.connect(audioContext.destination);
+
+                if (nextPlayTime < audioContext.currentTime) {
+                    nextPlayTime = audioContext.currentTime;
+                }
+
+                source.start(nextPlayTime);
+                nextPlayTime += audioBuffer.duration;
+
+                source.onended = () => {
+                    if (audioQueue.length > 0) {
+                        playNextChunk();
+                    } else if (allReceived) {
+                        onComplete();
+                    } else {
+                        isPlaying = false;
+                    }
+                };
+            }
+
+            // Read stream
+            let buffer = new Uint8Array(0);
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) {
+                    allReceived = true;
+                    if (!isPlaying && audioQueue.length === 0) {
+                        onComplete();
+                    }
+                    break;
+                }
+
+                // Concatenate buffer
+                const newBuffer = new Uint8Array(buffer.length + value.length);
+                newBuffer.set(buffer);
+                newBuffer.set(value, buffer.length);
+                buffer = newBuffer;
+
+                // Process complete PCM chunks (at least 4800 samples = 0.2 seconds)
+                const chunkSize = 4800 * 2; // 16-bit samples
+                while (buffer.length >= chunkSize) {
+                    const chunkData = buffer.slice(0, chunkSize);
+                    buffer = buffer.slice(chunkSize);
+
+                    // Convert to float32
+                    const int16Array = new Int16Array(chunkData.buffer, chunkData.byteOffset, chunkData.length / 2);
+                    const float32Array = new Float32Array(int16Array.length);
+                    for (let i = 0; i < int16Array.length; i++) {
+                        float32Array[i] = int16Array[i] / 32768;
+                    }
+
+                    audioQueue.push(float32Array);
+
+                    if (!isPlaying) {
+                        playNextChunk();
+                    }
+                }
+            }
+        }
+
+        async function playAudioFromCache(cachedData, onComplete) {
+            const audioContext = getAudioContext();
+            if (audioContext.state === 'suspended') {
+                await audioContext.resume();
+            }
+
+            const arrayBuffer = base64ToArrayBuffer(cachedData.data);
+            const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+
+            const source = audioContext.createBufferSource();
+            source.buffer = audioBuffer;
+            source.connect(audioContext.destination);
+            source.onended = () => onComplete();
+            source.start(0);
+
+            state.currentAudio = source;
         }
 
         init();
