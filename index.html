@@ -528,7 +528,8 @@
             voiceChatSilenceTimer: null, // Timer for silence detection
             voiceChatVadActive: false, // Voice Activity Detection state
             voiceChatSpeechDetected: false, // Whether speech was detected in current session
-            voiceChatProcessing: false // Whether processing ASR/LLM/TTS
+            voiceChatProcessing: false, // Whether processing ASR/LLM/TTS
+            voiceChatSpeechStartChunkIndex: -1 // Chunk index when speech started
         };
 
         // Audio Helpers
@@ -3277,23 +3278,41 @@ ${conversationText}
                 state.voiceChatRecorder = recorder;
                 state.voiceChatAudioChunks = [];
                 state.voiceChatSpeechDetected = false; // 标记是否检测到过语音
+                state.voiceChatSpeechStartChunkIndex = -1; // 语音开始时的 chunk 索引
 
                 recorder.ondataavailable = (event) => {
                     // 收集所有音频数据（保留完整的 webm 文件头）
                     if (event.data.size > 0) {
                         state.voiceChatAudioChunks.push(event.data);
                     }
-                    // 记录是否检测到过语音
-                    if (state.voiceChatVadActive) {
+                    // 记录语音开始时的 chunk 索引
+                    if (state.voiceChatVadActive && !state.voiceChatSpeechDetected) {
                         state.voiceChatSpeechDetected = true;
+                        // 保留语音开始前的 1-2 个 chunk（约 100-200ms），确保不丢失语音开头
+                        state.voiceChatSpeechStartChunkIndex = Math.max(0, state.voiceChatAudioChunks.length - 2);
+                        console.log(`[VoiceChat] 语音开始，起始 chunk 索引: ${state.voiceChatSpeechStartChunkIndex}`);
                     }
                 };
 
                 recorder.onstop = async () => {
                     // 只有在检测到语音时才发送给服务器
                     if (state.voiceChatAudioChunks.length > 0 && state.voiceChatActive && state.voiceChatSpeechDetected) {
-                        const audioBlob = new Blob(state.voiceChatAudioChunks, { type: recorder.mimeType || mimeType || 'audio/webm' });
+                        // 裁剪静音部分：只保留从语音开始的 chunks
+                        // 注意：第一个 chunk 包含 webm 文件头，必须保留
+                        let chunksToUse;
+                        if (state.voiceChatSpeechStartChunkIndex > 0) {
+                            // 保留第一个 chunk（文件头）+ 语音开始后的 chunks
+                            const headerChunk = state.voiceChatAudioChunks[0];
+                            const speechChunks = state.voiceChatAudioChunks.slice(state.voiceChatSpeechStartChunkIndex);
+                            chunksToUse = [headerChunk, ...speechChunks];
+                            console.log(`[VoiceChat] 裁剪静音: 原始 ${state.voiceChatAudioChunks.length} chunks -> 使用 ${chunksToUse.length} chunks (头部 + 从索引 ${state.voiceChatSpeechStartChunkIndex} 开始)`);
+                        } else {
+                            chunksToUse = state.voiceChatAudioChunks;
+                        }
+
+                        const audioBlob = new Blob(chunksToUse, { type: recorder.mimeType || mimeType || 'audio/webm' });
                         if (audioBlob.size > 1000) {
+                            console.log(`[VoiceChat] 最终音频大小: ${(audioBlob.size / 1024).toFixed(2)} KB`);
                             await processVoiceChatAudio(audioBlob);
                         }
                     } else if (!state.voiceChatSpeechDetected) {
