@@ -534,6 +534,7 @@
             voiceChatAudioChunks: [], // Audio chunks being recorded
             voiceChatSilenceTimer: null, // Timer for silence detection
             voiceChatVadActive: false, // Voice Activity Detection state
+            voiceChatSpeechDetected: false, // Whether speech was detected in current session
             voiceChatProcessing: false // Whether processing ASR/LLM/TTS
         };
 
@@ -3304,20 +3305,32 @@ ${conversationText}
                 const recorder = new MediaRecorder(stream, options);
                 state.voiceChatRecorder = recorder;
                 state.voiceChatAudioChunks = [];
+                state.voiceChatSpeechDetected = false; // 标记是否检测到过语音
 
                 recorder.ondataavailable = (event) => {
-                    // 只在 VAD 检测到语音活动时才收集音频数据
-                    // 这样可以过滤掉用户开口前的静音部分
-                    if (event.data.size > 0 && state.voiceChatVadActive) {
+                    // 收集所有音频数据（保留完整的 webm 文件头）
+                    if (event.data.size > 0) {
                         state.voiceChatAudioChunks.push(event.data);
+                    }
+                    // 记录是否检测到过语音
+                    if (state.voiceChatVadActive) {
+                        state.voiceChatSpeechDetected = true;
                     }
                 };
 
                 recorder.onstop = async () => {
-                    if (state.voiceChatAudioChunks.length > 0 && state.voiceChatActive) {
+                    // 只有在检测到语音时才发送给服务器
+                    if (state.voiceChatAudioChunks.length > 0 && state.voiceChatActive && state.voiceChatSpeechDetected) {
                         const audioBlob = new Blob(state.voiceChatAudioChunks, { type: recorder.mimeType || mimeType || 'audio/webm' });
                         if (audioBlob.size > 1000) {
                             await processVoiceChatAudio(audioBlob);
+                        }
+                    } else if (!state.voiceChatSpeechDetected) {
+                        // 没有检测到语音，重新开始监听
+                        console.log('[VoiceChat] 未检测到语音，重新开始监听');
+                        state.voiceChatProcessing = false;
+                        if (state.voiceChatActive) {
+                            setTimeout(() => startVoiceChatListening(), 100);
                         }
                     }
                 };
@@ -3364,6 +3377,7 @@ ${conversationText}
             state.voiceChatVadActive = false;
             state.voiceChatAnalyser = null;
             state.voiceChatRecorder = null;
+            state.voiceChatSpeechDetected = false;
         }
 
         // VAD (Voice Activity Detection) Configuration
