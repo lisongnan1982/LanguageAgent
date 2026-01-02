@@ -3817,7 +3817,6 @@ ${conversationText}
                 throw new Error('TTS stream request failed');
             }
 
-            const reader = response.body.getReader();
             const sampleRate = 24000;
             let audioQueue = [];
             let isPlaying = false;
@@ -3860,8 +3859,11 @@ ${conversationText}
                 };
             }
 
-            // Read stream
-            let buffer = new Uint8Array(0);
+            // 使用 EventSource 解析 SSE 格式的响应
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let sseBuffer = '';
+
             while (true) {
                 const { done, value } = await reader.read();
                 if (done) {
@@ -3872,29 +3874,46 @@ ${conversationText}
                     break;
                 }
 
-                // Concatenate buffer
-                const newBuffer = new Uint8Array(buffer.length + value.length);
-                newBuffer.set(buffer);
-                newBuffer.set(value, buffer.length);
-                buffer = newBuffer;
+                // 解析 SSE 格式
+                sseBuffer += decoder.decode(value, { stream: true });
+                const lines = sseBuffer.split('\n');
+                sseBuffer = lines.pop(); // 保留最后一个不完整的行
 
-                // Process complete PCM chunks (at least 4800 samples = 0.2 seconds)
-                const chunkSize = 4800 * 2; // 16-bit samples
-                while (buffer.length >= chunkSize) {
-                    const chunkData = buffer.slice(0, chunkSize);
-                    buffer = buffer.slice(chunkSize);
+                for (const line of lines) {
+                    if (line.startsWith('data: ')) {
+                        try {
+                            const jsonStr = line.slice(6); // 去掉 'data: ' 前缀
+                            const data = JSON.parse(jsonStr);
 
-                    // Convert to float32
-                    const int16Array = new Int16Array(chunkData.buffer, chunkData.byteOffset, chunkData.length / 2);
-                    const float32Array = new Float32Array(int16Array.length);
-                    for (let i = 0; i < int16Array.length; i++) {
-                        float32Array[i] = int16Array[i] / 32768;
-                    }
+                            if (data.type === 'audio' && data.data) {
+                                // 解码 base64 音频数据
+                                const binaryString = atob(data.data);
+                                const bytes = new Uint8Array(binaryString.length);
+                                for (let i = 0; i < binaryString.length; i++) {
+                                    bytes[i] = binaryString.charCodeAt(i);
+                                }
 
-                    audioQueue.push(float32Array);
+                                // 转换 16-bit PCM 到 Float32
+                                const int16Array = new Int16Array(bytes.buffer);
+                                const float32Array = new Float32Array(int16Array.length);
+                                for (let i = 0; i < int16Array.length; i++) {
+                                    float32Array[i] = int16Array[i] / 32768;
+                                }
 
-                    if (!isPlaying) {
-                        playNextChunk();
+                                audioQueue.push(float32Array);
+
+                                if (!isPlaying) {
+                                    playNextChunk();
+                                }
+                            } else if (data.type === 'end') {
+                                console.log('[TTS Stream] 接收完成, 总块数:', data.totalChunks);
+                                allReceived = true;
+                            } else if (data.type === 'error') {
+                                console.error('[TTS Stream] 错误:', data.message);
+                            }
+                        } catch (e) {
+                            console.error('[TTS Stream] 解析错误:', e);
+                        }
                     }
                 }
             }
