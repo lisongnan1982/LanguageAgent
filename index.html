@@ -3393,7 +3393,11 @@ ${conversationText}
             ZCR_SPEECH_MIN: 0.02,          // Min zero-crossing rate for speech
             ZCR_SPEECH_MAX: 0.25,          // Max zero-crossing rate for speech
             SPECTRAL_FLATNESS_MAX: 0.5,    // Max spectral flatness (speech is less flat than noise)
-            HANGOVER_FRAMES: 15            // Keep speech active for extra frames after drop
+            HANGOVER_FRAMES: 15,           // Keep speech active for extra frames after drop
+            // 1秒确认窗口参数
+            CONFIRMATION_WINDOW: 1000,     // 1秒确认窗口
+            SPEECH_RATIO_THRESHOLD: 0.4,   // 1秒内至少 40% 的帧被判定为语音
+            ENERGY_CONSISTENCY_THRESHOLD: 0.6 // 能量一致性阈值
         };
 
         let noiseFloor = 0;
@@ -3404,6 +3408,11 @@ ${conversationText}
         let smoothedEnergy = 0;
         let hangoverCounter = 0;
         let noiseFloorHistory = [];
+
+        // 1秒确认窗口相关变量
+        let speechCandidateStartTime = null;  // 候选语音开始时间
+        let confirmationWindowData = [];      // 确认窗口内的分析数据
+        let isInConfirmationWindow = false;   // 是否在确认窗口中
 
         // Calculate spectral flatness (noise tends to have higher flatness than speech)
         function calculateSpectralFlatness(dataArray, minBin, maxBin) {
@@ -3452,6 +3461,11 @@ ${conversationText}
             smoothedEnergy = 0;
             hangoverCounter = 0;
             noiseFloorHistory = [];
+
+            // 重置确认窗口状态
+            speechCandidateStartTime = null;
+            confirmationWindowData = [];
+            isInConfirmationWindow = false;
 
             // Start calibration phase
             isCalibrating = true;
@@ -3555,50 +3569,102 @@ ${conversationText}
                                        (isSpectralPatternSpeechLike || isCentroidInSpeechRange) &&
                                        hasPeakEnergy;
 
+                // 记录当前帧的分析数据（用于1秒确认窗口）
+                const frameData = {
+                    timestamp: Date.now(),
+                    isSpeechLikely,
+                    energy: smoothedEnergy,
+                    spectralFlatness,
+                    spectralCentroid
+                };
+
                 if (isSpeechLikely) {
                     consecutiveSpeechFrames++;
                     consecutiveSilenceFrames = 0;
                     hangoverCounter = VAD_CONFIG.HANGOVER_FRAMES;
 
-                    // Require consecutive frames to confirm speech
-                    if (consecutiveSpeechFrames >= VAD_CONFIG.CONSECUTIVE_FRAMES_REQUIRED) {
-                        if (!state.voiceChatVadActive) {
-                            state.voiceChatVadActive = true;
-                            speechStartTime = Date.now();
-                            console.log(`[VAD] Speech detected. Threshold: ${dynamicThreshold.toFixed(4)}, Energy: ${smoothedEnergy.toFixed(4)}, Flatness: ${spectralFlatness.toFixed(3)}, Centroid: ${spectralCentroid.toFixed(0)}Hz`);
-                            updateVoiceChatUI('detecting');
-                        }
-                        silenceStartTime = null;
+                    // 检测到可能的语音，进入确认窗口
+                    if (consecutiveSpeechFrames >= VAD_CONFIG.CONSECUTIVE_FRAMES_REQUIRED && !isInConfirmationWindow && !state.voiceChatVadActive) {
+                        isInConfirmationWindow = true;
+                        speechCandidateStartTime = Date.now();
+                        confirmationWindowData = [frameData];
+                        console.log(`[VAD] 进入1秒确认窗口...`);
+                        elements.voiceChatStatus.textContent = '检测中...';
                     }
                 } else {
                     // Apply hangover to prevent cutting off speech during brief pauses
                     if (hangoverCounter > 0) {
                         hangoverCounter--;
-                        // Don't increment silence frames during hangover
                     } else {
                         consecutiveSilenceFrames++;
                         consecutiveSpeechFrames = 0;
                     }
+                }
 
-                    if (state.voiceChatVadActive && consecutiveSilenceFrames >= VAD_CONFIG.CONSECUTIVE_FRAMES_REQUIRED && hangoverCounter === 0) {
-                        // Silence detected after speech
-                        if (!silenceStartTime) {
-                            silenceStartTime = Date.now();
-                        } else if (Date.now() - silenceStartTime > VAD_CONFIG.SILENCE_DURATION) {
-                            // Silence long enough - process the audio
-                            const speechDuration = speechStartTime ? Date.now() - speechStartTime : 0;
-                            if (speechDuration > VAD_CONFIG.SPEECH_MIN_DURATION) {
-                                console.log(`[VAD] Speech ended. Duration: ${speechDuration}ms`);
-                                stopVoiceChatListening();
-                                return;
-                            } else {
-                                // Too short, reset
-                                console.log(`[VAD] Speech too short (${speechDuration}ms), resetting`);
-                                state.voiceChatVadActive = false;
-                                silenceStartTime = null;
-                                speechStartTime = null;
-                                updateVoiceChatUI('listening');
-                            }
+                // 在确认窗口中收集数据
+                if (isInConfirmationWindow && !state.voiceChatVadActive) {
+                    confirmationWindowData.push(frameData);
+                    const elapsed = Date.now() - speechCandidateStartTime;
+
+                    // 1秒确认窗口结束，分析数据
+                    if (elapsed >= VAD_CONFIG.CONFIRMATION_WINDOW) {
+                        const totalFrames = confirmationWindowData.length;
+                        const speechFrames = confirmationWindowData.filter(f => f.isSpeechLikely).length;
+                        const speechRatio = speechFrames / totalFrames;
+
+                        // 计算能量的稳定性（标准差/平均值）
+                        const energies = confirmationWindowData.map(f => f.energy);
+                        const avgEnergy = energies.reduce((a, b) => a + b, 0) / energies.length;
+                        const variance = energies.reduce((a, b) => a + Math.pow(b - avgEnergy, 2), 0) / energies.length;
+                        const stdDev = Math.sqrt(variance);
+                        const energyConsistency = avgEnergy > 0 ? 1 - Math.min(stdDev / avgEnergy, 1) : 0;
+
+                        // 计算频谱质心的稳定性
+                        const centroids = confirmationWindowData.filter(f => f.isSpeechLikely).map(f => f.spectralCentroid);
+                        const centroidInRange = centroids.filter(c => c >= 300 && c <= 1500).length;
+                        const centroidRatio = centroids.length > 0 ? centroidInRange / centroids.length : 0;
+
+                        console.log(`[VAD] 确认窗口分析: 语音帧比例=${(speechRatio*100).toFixed(1)}%, 能量一致性=${(energyConsistency*100).toFixed(1)}%, 质心在范围内=${(centroidRatio*100).toFixed(1)}%`);
+
+                        // 综合判断：语音帧比例 > 40% 且 能量有一定一致性 且 质心大部分在语音范围内
+                        if (speechRatio >= VAD_CONFIG.SPEECH_RATIO_THRESHOLD &&
+                            energyConsistency >= VAD_CONFIG.ENERGY_CONSISTENCY_THRESHOLD &&
+                            centroidRatio >= 0.5) {
+                            // 确认是真实语音
+                            state.voiceChatVadActive = true;
+                            speechStartTime = speechCandidateStartTime; // 使用候选开始时间
+                            console.log(`[VAD] ✓ 语音确认! Ratio: ${(speechRatio*100).toFixed(1)}%, Consistency: ${(energyConsistency*100).toFixed(1)}%`);
+                            updateVoiceChatUI('detecting');
+                            silenceStartTime = null;
+                        } else {
+                            // 判定为噪声，重置
+                            console.log(`[VAD] ✗ 判定为噪声，重置`);
+                            updateVoiceChatUI('listening');
+                        }
+
+                        // 重置确认窗口
+                        isInConfirmationWindow = false;
+                        confirmationWindowData = [];
+                        speechCandidateStartTime = null;
+                    }
+                }
+
+                // 语音结束检测（仅在已确认语音后）
+                if (state.voiceChatVadActive && consecutiveSilenceFrames >= VAD_CONFIG.CONSECUTIVE_FRAMES_REQUIRED && hangoverCounter === 0) {
+                    if (!silenceStartTime) {
+                        silenceStartTime = Date.now();
+                    } else if (Date.now() - silenceStartTime > VAD_CONFIG.SILENCE_DURATION) {
+                        const speechDuration = speechStartTime ? Date.now() - speechStartTime : 0;
+                        if (speechDuration > VAD_CONFIG.SPEECH_MIN_DURATION) {
+                            console.log(`[VAD] Speech ended. Duration: ${speechDuration}ms`);
+                            stopVoiceChatListening();
+                            return;
+                        } else {
+                            console.log(`[VAD] Speech too short (${speechDuration}ms), resetting`);
+                            state.voiceChatVadActive = false;
+                            silenceStartTime = null;
+                            speechStartTime = null;
+                            updateVoiceChatUI('listening');
                         }
                     }
                 }
