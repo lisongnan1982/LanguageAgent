@@ -874,7 +874,8 @@ app.post('/api/asr', upload.single('audio'), async (req, res) => {
 
         // 2. Setup WebSocket Connection
         let targetResource = cluster || 'volcengine_streaming_common';
-        if (targetResource === 'volc_auc_common') {
+        // 迁移旧的 ASR Resource ID 值
+        if (targetResource === 'volc_auc_common' || targetResource === 'volc.bigasr.auc') {
             targetResource = 'volcengine_streaming_common';
         }
 
