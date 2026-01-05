@@ -4036,43 +4036,68 @@ ${conversationText}
 
                 debugLog('Whisper', `transformers.js 导入成功 (${(performance.now() - importStart).toFixed(0)}ms)`);
 
+                // 配置环境 - 使用镜像源
                 env.allowLocalModels = false;
                 env.useBrowserCache = true;
+
+                // 尝试使用 HuggingFace 镜像源 (中国大陆可访问)
+                // 如果默认源失败，会自动回退
+                const mirrors = [
+                    'https://hf-mirror.com',  // 中国镜像
+                    'https://huggingface.co'  // 默认源
+                ];
+
                 debugLog('Whisper', '步骤2: 环境配置完成');
-
                 debugLog('Whisper', `步骤3: 创建 pipeline (${state.whisperModel})...`);
-                const pipelineStart = performance.now();
 
-                state.whisperPipeline = await pipeline('automatic-speech-recognition', state.whisperModel, {
-                    progress_callback: (progress) => {
-                        if (progress.status === 'downloading') {
-                            const percent = progress.progress ? Math.round(progress.progress) : 0;
-                            const fileName = progress.file || '';
-                            debugLog('Whisper', `下载: ${fileName} (${percent}%)`);
-                            if (elements.whisperProgressBar) {
-                                elements.whisperProgressBar.style.width = `${percent}%`;
+                let lastError = null;
+                for (const mirror of mirrors) {
+                    try {
+                        debugLog('Whisper', `尝试镜像源: ${mirror}`);
+                        env.remoteHost = mirror;
+                        env.remotePathTemplate = '{model}/resolve/{revision}/';
+
+                        const pipelineStart = performance.now();
+                        state.whisperPipeline = await pipeline('automatic-speech-recognition', state.whisperModel, {
+                            progress_callback: (progress) => {
+                                if (progress.status === 'downloading') {
+                                    const percent = progress.progress ? Math.round(progress.progress) : 0;
+                                    const fileName = progress.file || '';
+                                    debugLog('Whisper', `下载: ${fileName} (${percent}%)`);
+                                    if (elements.whisperProgressBar) {
+                                        elements.whisperProgressBar.style.width = `${percent}%`;
+                                    }
+                                    if (elements.whisperProgressText) {
+                                        elements.whisperProgressText.textContent = `下载中: ${fileName} (${percent}%)`;
+                                    }
+                                } else if (progress.status === 'loading') {
+                                    debugLog('Whisper', '加载模型到内存...');
+                                    if (elements.whisperProgressText) {
+                                        elements.whisperProgressText.textContent = '加载模型到内存...';
+                                    }
+                                } else if (progress.status === 'ready') {
+                                    debugLog('Whisper', '模型就绪');
+                                } else if (progress.status === 'initiate') {
+                                    debugLog('Whisper', `开始: ${progress.file}`);
+                                } else if (progress.status === 'done') {
+                                    debugLog('Whisper', `完成: ${progress.file}`);
+                                }
                             }
-                            if (elements.whisperProgressText) {
-                                elements.whisperProgressText.textContent = `下载中: ${fileName} (${percent}%)`;
-                            }
-                        } else if (progress.status === 'loading') {
-                            debugLog('Whisper', '加载模型到内存...');
-                            if (elements.whisperProgressText) {
-                                elements.whisperProgressText.textContent = '加载模型到内存...';
-                            }
-                        } else if (progress.status === 'ready') {
-                            debugLog('Whisper', '模型就绪');
-                        } else if (progress.status === 'initiate') {
-                            debugLog('Whisper', `开始: ${progress.file}`);
-                        } else if (progress.status === 'done') {
-                            debugLog('Whisper', `完成: ${progress.file}`);
-                        }
+                        });
+
+                        debugLog('Whisper', `Pipeline 创建成功 (${(performance.now() - pipelineStart).toFixed(0)}ms)`);
+                        debugLog('Whisper', `使用镜像源: ${mirror}`);
+                        state.whisperModelLoaded = true;
+                        debugLog('Whisper', '========== 模型加载成功 ==========');
+                        return; // 成功，退出
+                    } catch (mirrorErr) {
+                        debugLog('Whisper', `镜像源 ${mirror} 失败: ${mirrorErr.message}`, 'warn');
+                        lastError = mirrorErr;
                     }
-                });
+                }
 
-                debugLog('Whisper', `Pipeline 创建成功 (${(performance.now() - pipelineStart).toFixed(0)}ms)`);
-                state.whisperModelLoaded = true;
-                debugLog('Whisper', '========== 模型加载成功 ==========');
+                // 所有镜像都失败
+                throw lastError || new Error('所有镜像源都无法访问');
             } catch (err) {
                 debugLog('Whisper', `加载失败: ${err.name} - ${err.message}`, 'error');
                 debugLog('Whisper', `堆栈: ${err.stack}`, 'error');
