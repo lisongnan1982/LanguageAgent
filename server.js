@@ -1100,6 +1100,355 @@ app.post('/api/asr', upload.single('audio'), async (req, res) => {
 });
 
 // ============================================
+// 大模型 ASR 接口 (火山引擎 BigModel SAUC)
+// 参考官方 Python 示例 (sauc_websocket_demo.py) 实现
+// ============================================
+app.post('/api/asr-bigmodel', upload.single('audio'), async (req, res) => {
+    const { appKey, accessKey } = req.body;
+    const audioFile = req.file;
+
+    // 计时对象
+    const timing = {};
+    const totalStartTime = Date.now();
+
+    if (!audioFile || !appKey || !accessKey) {
+        return res.status(400).json({ success: false, message: '缺少参数 (appKey, accessKey, audio)' });
+    }
+
+    console.log(`[BigModel-ASR] ========== 开始大模型ASR处理 ==========`);
+    console.log(`[BigModel-ASR] 接收文件大小: ${(audioFile.size / 1024).toFixed(2)} KB`);
+    console.log(`[BigModel-ASR] 原始文件名: ${audioFile.originalname}`);
+
+    let ws = null;
+    try {
+        // 1. 转换音频为 WAV 格式 (PCM s16le, 16k, 1ch)
+        const ffmpegStartTime = Date.now();
+        const wavBuffer = await convertToWav(audioFile.path, audioFile.originalname);
+        timing.ffmpegConvert = Date.now() - ffmpegStartTime;
+        console.log(`[BigModel-ASR] FFmpeg转换耗时: ${timing.ffmpegConvert} ms, WAV大小: ${(wavBuffer.length / 1024).toFixed(2)} KB`);
+
+        // 2. 建立 WebSocket 连接
+        const wsUrl = 'wss://openspeech.bytedance.com/api/v3/sauc/bigmodel';
+        const reqId = crypto.randomUUID();
+
+        const headers = {
+            "X-Api-Resource-Id": "volc.bigasr.sauc.duration",
+            "X-Api-Request-Id": reqId,
+            "X-Api-Access-Key": accessKey.trim(),
+            "X-Api-App-Key": appKey.trim()
+        };
+
+        console.log(`[BigModel-ASR] 连接 WebSocket: ${wsUrl}`);
+        const wsConnectStartTime = Date.now();
+        ws = new WebSocket(wsUrl, { headers });
+
+        await new Promise((resolve, reject) => {
+            ws.on('open', resolve);
+            ws.on('error', reject);
+        });
+        timing.wsConnect = Date.now() - wsConnectStartTime;
+        console.log(`[BigModel-ASR] WebSocket连接耗时: ${timing.wsConnect} ms`);
+
+        // 3. 发送 Full Client Request
+        const fullRequestStartTime = Date.now();
+        const fullRequest = constructBigmodelFullRequest(1);
+        ws.send(fullRequest);
+
+        // 等待 Full Request 响应
+        const fullResponse = await waitForBigmodelMessage(ws);
+        timing.fullRequest = Date.now() - fullRequestStartTime;
+        console.log(`[BigModel-ASR] Full Request耗时: ${timing.fullRequest} ms`);
+
+        if (fullResponse?.payloadMsg?.code !== 0) {
+            throw new Error(`Full Request failed: code=${fullResponse?.payloadMsg?.code}, message=${JSON.stringify(fullResponse?.payloadMsg)}`);
+        }
+
+        // 4. 分段发送音频数据
+        const audioChunksStartTime = Date.now();
+        const SEGMENT_DURATION_MS = 200; // 每段 200ms
+        const BYTES_PER_SECOND = 16000 * 2 * 1; // 16kHz, 16bit, 1ch
+        const SEGMENT_SIZE = Math.floor(BYTES_PER_SECOND * SEGMENT_DURATION_MS / 1000);
+
+        let offset = 0;
+        let seq = 1;
+        let finalResultText = '';
+        const chunks = [];
+
+        // 跳过 WAV 头部 (44 bytes)
+        const audioData = wavBuffer.slice(44);
+
+        while (offset < audioData.length) {
+            const end = Math.min(offset + SEGMENT_SIZE, audioData.length);
+            chunks.push(audioData.subarray(offset, end));
+            offset += SEGMENT_SIZE;
+        }
+        console.log(`[BigModel-ASR] 音频分块数: ${chunks.length}, 每块 ${SEGMENT_SIZE} bytes`);
+
+        // 发送音频块
+        for (let i = 0; i < chunks.length; i++) {
+            const chunk = chunks[i];
+            const isLast = (i === chunks.length - 1);
+            seq++;
+
+            const audioRequest = constructBigmodelAudioRequest(seq, chunk, isLast);
+            ws.send(audioRequest);
+
+            // 模拟实时流，按照音频时长发送
+            if (!isLast) {
+                await new Promise(resolve => setTimeout(resolve, SEGMENT_DURATION_MS / 2));
+            }
+        }
+        timing.audioChunks = Date.now() - audioChunksStartTime;
+        console.log(`[BigModel-ASR] 音频发送耗时: ${timing.audioChunks} ms`);
+
+        // 5. 等待最终结果
+        const finalWaitStartTime = Date.now();
+        while (true) {
+            const response = await waitForBigmodelMessage(ws, 15000);
+
+            if (response?.payloadMsg) {
+                const payload = response.payloadMsg;
+                if (payload.result) {
+                    finalResultText = payload.result;
+                    console.log(`[BigModel-ASR] 识别结果: "${finalResultText}"`);
+                }
+            }
+
+            if (response?.isLastPackage) {
+                console.log(`[BigModel-ASR] 收到最终包`);
+                break;
+            }
+        }
+        timing.finalWait = Date.now() - finalWaitStartTime;
+
+        ws.close();
+        if (fs.existsSync(audioFile.path)) fs.unlinkSync(audioFile.path);
+
+        timing.total = Date.now() - totalStartTime;
+        console.log(`[BigModel-ASR] ========== 总耗时: ${timing.total} ms ==========`);
+
+        if (finalResultText) {
+            res.json({ success: true, text: finalResultText, timing });
+        } else {
+            res.status(200).json({ success: true, text: "(未识别到有效语音)", timing });
+        }
+
+    } catch (error) {
+        console.error('[BigModel-ASR] Error:', error);
+        if (ws) {
+            try { ws.close(); } catch(e) {}
+        }
+        if (audioFile && fs.existsSync(audioFile.path)) fs.unlinkSync(audioFile.path);
+
+        timing.total = Date.now() - totalStartTime;
+        res.status(500).json({
+            success: false,
+            message: '大模型语音识别失败',
+            detail: error.message,
+            timing
+        });
+    }
+});
+
+// 转换音频为 WAV 格式
+function convertToWav(inputPath, originalName) {
+    return new Promise((resolve, reject) => {
+        let inputFormat = null;
+        if (originalName) {
+            if (originalName.includes('webm')) {
+                inputFormat = 'webm';
+            } else if (originalName.includes('mp4') || originalName.includes('m4a')) {
+                inputFormat = 'mp4';
+            } else if (originalName.includes('ogg')) {
+                inputFormat = 'ogg';
+            }
+        }
+
+        const args = [];
+        if (inputFormat) {
+            args.push('-f', inputFormat);
+        }
+        args.push(
+            '-i', inputPath,
+            '-acodec', 'pcm_s16le',
+            '-ac', '1',
+            '-ar', '16000',
+            '-f', 'wav',
+            '-'
+        );
+
+        execFile(ffmpegPath, args, { encoding: 'buffer', maxBuffer: 50 * 1024 * 1024 }, (error, stdout, stderr) => {
+            if (error) {
+                console.error('FFmpeg error:', stderr.toString());
+                reject(error);
+            } else {
+                resolve(stdout);
+            }
+        });
+    });
+}
+
+// BigModel 协议构造函数
+function constructBigmodelFullRequest(seq) {
+    const payload = {
+        user: {
+            uid: "demo_uid"
+        },
+        audio: {
+            format: "wav",
+            codec: "raw",
+            rate: 16000,
+            bits: 16,
+            channel: 1
+        },
+        request: {
+            model_name: "bigmodel",
+            enable_itn: true,
+            enable_punc: true,
+            enable_ddc: true,
+            show_utterances: true,
+            enable_nonstream: false
+        }
+    };
+
+    const payloadBytes = Buffer.from(JSON.stringify(payload), 'utf8');
+    const compressedPayload = zlib.gzipSync(payloadBytes);
+
+    // 构建 header (4 bytes)
+    const header = Buffer.alloc(4);
+    header[0] = (0x01 << 4) | 0x01; // version=1, header_size=1
+    header[1] = (0x01 << 4) | 0x01; // message_type=FULL_REQUEST, flags=POS_SEQUENCE
+    header[2] = (0x01 << 4) | 0x01; // serialization=JSON, compression=GZIP
+    header[3] = 0x00; // reserved
+
+    // 构建请求
+    const seqBuffer = Buffer.alloc(4);
+    seqBuffer.writeInt32BE(seq);
+
+    const sizeBuffer = Buffer.alloc(4);
+    sizeBuffer.writeUInt32BE(compressedPayload.length);
+
+    return Buffer.concat([header, seqBuffer, sizeBuffer, compressedPayload]);
+}
+
+function constructBigmodelAudioRequest(seq, audioData, isLast) {
+    const compressedAudio = zlib.gzipSync(audioData);
+
+    // 构建 header
+    const header = Buffer.alloc(4);
+    header[0] = (0x01 << 4) | 0x01; // version=1, header_size=1
+    if (isLast) {
+        header[1] = (0x02 << 4) | 0x03; // message_type=AUDIO_ONLY, flags=NEG_WITH_SEQUENCE
+        seq = -seq; // 最后一个包使用负序号
+    } else {
+        header[1] = (0x02 << 4) | 0x01; // message_type=AUDIO_ONLY, flags=POS_SEQUENCE
+    }
+    header[2] = (0x00 << 4) | 0x01; // serialization=NONE, compression=GZIP
+    header[3] = 0x00; // reserved
+
+    const seqBuffer = Buffer.alloc(4);
+    seqBuffer.writeInt32BE(seq);
+
+    const sizeBuffer = Buffer.alloc(4);
+    sizeBuffer.writeUInt32BE(compressedAudio.length);
+
+    return Buffer.concat([header, seqBuffer, sizeBuffer, compressedAudio]);
+}
+
+function waitForBigmodelMessage(ws, timeoutMs = 10000) {
+    return new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => {
+            reject(new Error('等待服务器响应超时'));
+        }, timeoutMs);
+
+        const onMessage = (data) => {
+            clearTimeout(timeout);
+            ws.off('message', onMessage);
+            ws.off('error', onError);
+            const response = parseBigmodelResponse(data);
+            resolve(response);
+        };
+
+        const onError = (err) => {
+            clearTimeout(timeout);
+            ws.off('message', onMessage);
+            ws.off('error', onError);
+            reject(err);
+        };
+
+        ws.on('message', onMessage);
+        ws.on('error', onError);
+    });
+}
+
+function parseBigmodelResponse(msg) {
+    const response = {
+        code: 0,
+        event: 0,
+        isLastPackage: false,
+        payloadSequence: 0,
+        payloadSize: 0,
+        payloadMsg: null
+    };
+
+    const headerSize = msg[0] & 0x0f;
+    const messageType = msg[1] >> 4;
+    const messageTypeSpecificFlags = msg[1] & 0x0f;
+    const serializationMethod = msg[2] >> 4;
+    const messageCompression = msg[2] & 0x0f;
+
+    let payload = msg.slice(headerSize * 4);
+
+    // 解析 flags
+    if (messageTypeSpecificFlags & 0x01) {
+        response.payloadSequence = payload.readInt32BE(0);
+        payload = payload.slice(4);
+    }
+    if (messageTypeSpecificFlags & 0x02) {
+        response.isLastPackage = true;
+    }
+    if (messageTypeSpecificFlags & 0x04) {
+        response.event = payload.readInt32BE(0);
+        payload = payload.slice(4);
+    }
+
+    // 解析 message type
+    if (messageType === 0x09) { // SERVER_FULL_RESPONSE
+        response.payloadSize = payload.readUInt32BE(0);
+        payload = payload.slice(4);
+    } else if (messageType === 0x0f) { // SERVER_ERROR_RESPONSE
+        response.code = payload.readInt32BE(0);
+        response.payloadSize = payload.readUInt32BE(4);
+        payload = payload.slice(8);
+    }
+
+    if (payload.length === 0) {
+        return response;
+    }
+
+    // 解压
+    if (messageCompression === 0x01) { // GZIP
+        try {
+            payload = zlib.gunzipSync(payload);
+        } catch (e) {
+            console.error('[BigModel-ASR] Failed to decompress:', e);
+            return response;
+        }
+    }
+
+    // 解析 payload
+    if (serializationMethod === 0x01) { // JSON
+        try {
+            response.payloadMsg = JSON.parse(payload.toString('utf8'));
+        } catch (e) {
+            console.error('[BigModel-ASR] Failed to parse JSON:', e);
+        }
+    }
+
+    return response;
+}
+
+// ============================================
 // MCP 协议端点 (集成在主服务器中)
 // ============================================
 

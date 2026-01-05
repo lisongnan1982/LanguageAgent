@@ -272,9 +272,10 @@
                         <select id="asrMode"
                                 class="w-full px-4 py-3 md:py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-base">
                             <option value="cloud">☁️ 云端 ASR (火山引擎)</option>
+                            <option value="bigmodel">🤖 大模型 ASR (火山 BigModel)</option>
                             <option value="local">📱 本地 ASR (Whisper)</option>
                         </select>
-                        <p class="text-[10px] text-gray-400 mt-1">本地模式完全离线运行，首次需下载模型(~75MB)</p>
+                        <p class="text-[10px] text-gray-400 mt-1">大模型模式识别准确度更高，本地模式完全离线运行</p>
                     </div>
                     <div id="cloudAsrSettings">
                         <div class="mb-3">
@@ -290,6 +291,19 @@
                                 <option value="volcengine_streaming_en">volcengine_streaming_en (英文)</option>
                             </select>
                         </div>
+                    </div>
+                    <div id="bigmodelAsrSettings" class="hidden">
+                        <div class="mb-3">
+                            <label class="block text-sm font-medium text-gray-700 mb-1">App Key</label>
+                            <input type="text" id="bigmodelAppKey" placeholder="火山引擎 App Key"
+                                   class="w-full px-4 py-3 md:py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-base">
+                        </div>
+                        <div class="mb-3">
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Access Key</label>
+                            <input type="password" id="bigmodelAccessKey" placeholder="火山引擎 Access Key"
+                                   class="w-full px-4 py-3 md:py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-base">
+                        </div>
+                        <p class="text-[10px] text-gray-400 mt-1">大模型 ASR 使用 bigmodel 接口，准确度更高</p>
                     </div>
                     <div id="localAsrSettings" class="hidden">
                         <div class="mb-3">
@@ -646,12 +660,15 @@
             voiceChatProcessing: false, // Whether processing ASR/LLM/TTS
             voiceChatSpeechStartChunkIndex: -1, // Chunk index when speech started
             // Local ASR State
-            asrMode: localStorage.getItem('asr_mode') || 'cloud', // 'cloud' or 'local'
+            asrMode: localStorage.getItem('asr_mode') || 'cloud', // 'cloud', 'bigmodel' or 'local'
             whisperModel: localStorage.getItem('whisper_model') || 'Xenova/whisper-tiny',
             whisperLanguage: localStorage.getItem('whisper_language') || 'chinese',
             whisperPipeline: null, // Whisper pipeline instance
             whisperModelLoaded: false, // Whether Whisper model is loaded
-            whisperModelLoading: false // Whether Whisper model is currently loading
+            whisperModelLoading: false, // Whether Whisper model is currently loading
+            // BigModel ASR State
+            bigmodelAppKey: localStorage.getItem('bigmodel_app_key') || '',
+            bigmodelAccessKey: localStorage.getItem('bigmodel_access_key') || ''
         };
 
         // Audio Helpers
@@ -765,6 +782,9 @@
             // 本地 ASR 元素
             asrMode: document.getElementById('asrMode'),
             cloudAsrSettings: document.getElementById('cloudAsrSettings'),
+            bigmodelAsrSettings: document.getElementById('bigmodelAsrSettings'),
+            bigmodelAppKey: document.getElementById('bigmodelAppKey'),
+            bigmodelAccessKey: document.getElementById('bigmodelAccessKey'),
             localAsrSettings: document.getElementById('localAsrSettings'),
             whisperModel: document.getElementById('whisperModel'),
             whisperLanguage: document.getElementById('whisperLanguage'),
@@ -851,6 +871,9 @@
             elements.asrMode.value = state.asrMode;
             elements.whisperModel.value = state.whisperModel;
             elements.whisperLanguage.value = state.whisperLanguage;
+            // 初始化大模型 ASR 设置
+            elements.bigmodelAppKey.value = state.bigmodelAppKey;
+            elements.bigmodelAccessKey.value = state.bigmodelAccessKey;
             updateAsrModeUI();
             if (state.apiKey) {
                 fetchModels();
@@ -860,13 +883,19 @@
 
         // 更新 ASR 模式 UI
         function updateAsrModeUI() {
+            // 隐藏所有设置面板
+            elements.cloudAsrSettings.classList.add('hidden');
+            elements.bigmodelAsrSettings.classList.add('hidden');
+            elements.localAsrSettings.classList.add('hidden');
+
             if (state.asrMode === 'local') {
-                elements.cloudAsrSettings.classList.add('hidden');
                 elements.localAsrSettings.classList.remove('hidden');
                 updateWhisperModelStatus();
+            } else if (state.asrMode === 'bigmodel') {
+                elements.bigmodelAsrSettings.classList.remove('hidden');
             } else {
+                // cloud 模式
                 elements.cloudAsrSettings.classList.remove('hidden');
-                elements.localAsrSettings.classList.add('hidden');
             }
         }
 
@@ -971,6 +1000,9 @@
                 state.asrMode = elements.asrMode.value;
                 state.whisperModel = elements.whisperModel.value;
                 state.whisperLanguage = elements.whisperLanguage.value;
+                // 保存大模型 ASR 设置
+                state.bigmodelAppKey = elements.bigmodelAppKey.value;
+                state.bigmodelAccessKey = elements.bigmodelAccessKey.value;
 
                 localStorage.setItem('openrouter_api_key', state.apiKey);
                 localStorage.setItem('selected_model', state.selectedModel);
@@ -993,6 +1025,9 @@
                 localStorage.setItem('asr_mode', state.asrMode);
                 localStorage.setItem('whisper_model', state.whisperModel);
                 localStorage.setItem('whisper_language', state.whisperLanguage);
+                // 保存大模型 ASR 设置到 localStorage
+                localStorage.setItem('bigmodel_app_key', state.bigmodelAppKey);
+                localStorage.setItem('bigmodel_access_key', state.bigmodelAccessKey);
 
                 elements.settingsModal.classList.add('hidden');
                 checkInputs();
@@ -1176,10 +1211,19 @@
                 const asrStartTime = performance.now();
                 console.log(`[ASR] ========== 开始ASR处理 ==========`);
                 console.log(`[ASR] 音频Blob大小: ${(blob.size / 1024).toFixed(2)} KB, 类型: ${blob.type}`);
+                console.log(`[ASR] 当前ASR模式: ${state.asrMode}`);
 
-                if (!state.volcAppId || !state.volcToken) {
-                    alert('请先在设置中配置火山引擎 AppID 和 Access Token');
-                    return;
+                // 根据 ASR 模式检查必要参数
+                if (state.asrMode === 'cloud') {
+                    if (!state.volcAppId || !state.volcToken) {
+                        alert('请先在设置中配置火山引擎 AppID 和 Access Key');
+                        return;
+                    }
+                } else if (state.asrMode === 'bigmodel') {
+                    if (!state.bigmodelAppKey || !state.bigmodelAccessKey) {
+                        alert('请先在设置中配置大模型 ASR 的 App Key 和 Access Key');
+                        return;
+                    }
                 }
 
                 if (blob.size < 1000) {
@@ -1190,50 +1234,23 @@
                 elements.userInput.placeholder = "正在识别语音...";
                 elements.userInput.disabled = true;
 
-                const formDataStartTime = performance.now();
-                const formData = new FormData();
-                const ext = blob.type.includes('mp4') ? 'mp4' : blob.type.includes('webm') ? 'webm' : 'audio';
-                formData.append('audio', blob, `recording.${ext}`);
-                formData.append('appid', state.volcAppId);
-                formData.append('token', state.volcToken);
-                formData.append('cluster', state.volcCluster);
-                console.log(`[ASR] FormData准备耗时: ${(performance.now() - formDataStartTime).toFixed(2)} ms`);
-
                 try {
-                    const uploadStartTime = performance.now();
-                    console.log(`[ASR] 开始上传到服务器...`);
-                    const resp = await fetch('/api/asr', {
-                        method: 'POST',
-                        body: formData
-                    });
-                    const uploadEndTime = performance.now();
-                    console.log(`[ASR] 服务器响应耗时: ${(uploadEndTime - uploadStartTime).toFixed(2)} ms`);
-
-                    const parseStartTime = performance.now();
-                    const data = await resp.json();
-                    console.log(`[ASR] JSON解析耗时: ${(performance.now() - parseStartTime).toFixed(2)} ms`);
-
-                    // 打印服务端返回的计时信息
-                    if (data.timing) {
-                        console.log(`[ASR] === 服务端计时详情 ===`);
-                        for (const [key, value] of Object.entries(data.timing)) {
-                            console.log(`[ASR]   ${key}: ${value} ms`);
-                        }
-                    }
+                    // 使用统一的 performASR 函数
+                    const text = await performASR(blob);
 
                     const totalTime = performance.now() - asrStartTime;
                     console.log(`[ASR] ========== ASR总耗时: ${totalTime.toFixed(2)} ms ==========`);
 
-                    if (data.text) {
-                        elements.userInput.value = data.text;
+                    if (text) {
+                        elements.userInput.value = text;
                         elements.userInput.dispatchEvent(new Event('input'));
                         // ASR 识别成功后直接发送消息
                         elements.userInput.disabled = false;
                         elements.userInput.placeholder = "输入消息...";
                         sendMessage();
-                        return; // 提前返回，避免 finally 重复设置
+                        return;
                     } else {
-                        alert('识别失败: ' + (data.message || '未知错误'));
+                        alert('识别失败: 未识别到有效语音');
                     }
                 } catch (err) {
                     console.error(`[ASR] 错误: ${err.message}`);
@@ -3315,10 +3332,20 @@ ${conversationText}
                 alert('请先在设置中配置 API Key');
                 return;
             }
-            if (!state.volcAppId || !state.volcToken) {
-                alert('请先在设置中配置火山引擎 ASR 参数');
-                return;
+
+            // 根据 ASR 模式检查必要参数
+            if (state.asrMode === 'cloud') {
+                if (!state.volcAppId || !state.volcToken) {
+                    alert('请先在设置中配置火山引擎 ASR 参数 (AppID 和 Access Key)');
+                    return;
+                }
+            } else if (state.asrMode === 'bigmodel') {
+                if (!state.bigmodelAppKey || !state.bigmodelAccessKey) {
+                    alert('请先在设置中配置大模型 ASR 参数 (App Key 和 Access Key)');
+                    return;
+                }
             }
+            // 本地 ASR 模式不需要额外参数
             if (state.volcTtsMode === 'stream') {
                 if (!state.volcTtsAccessKey || !state.volcTtsCluster) {
                     alert('请先在设置中配置火山引擎 TTS 参数 (Access Key 和 Resource ID)');
@@ -3911,9 +3938,11 @@ ${conversationText}
         }
 
         async function performASR(audioBlob) {
-            // 根据 ASR 模式选择云端或本地
+            // 根据 ASR 模式选择云端、大模型或本地
             if (state.asrMode === 'local') {
                 return await performLocalASR(audioBlob);
+            } else if (state.asrMode === 'bigmodel') {
+                return await performBigmodelASR(audioBlob);
             } else {
                 return await performCloudASR(audioBlob);
             }
@@ -3929,6 +3958,23 @@ ${conversationText}
             formData.append('cluster', state.volcCluster);
 
             const resp = await fetch('/api/asr', {
+                method: 'POST',
+                body: formData
+            });
+
+            const data = await resp.json();
+            return data.text || null;
+        }
+
+        // 大模型 ASR (火山引擎 BigModel)
+        async function performBigmodelASR(audioBlob) {
+            const formData = new FormData();
+            const ext = audioBlob.type.includes('mp4') ? 'mp4' : audioBlob.type.includes('webm') ? 'webm' : 'audio';
+            formData.append('audio', audioBlob, `recording.${ext}`);
+            formData.append('appKey', state.bigmodelAppKey);
+            formData.append('accessKey', state.bigmodelAccessKey);
+
+            const resp = await fetch('/api/asr-bigmodel', {
                 method: 'POST',
                 body: formData
             });
