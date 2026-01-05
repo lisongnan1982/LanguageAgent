@@ -59,6 +59,18 @@ const SSL_CERT_PATH = path.join(__dirname, 'ssl', 'webroleplay.xyz.pem');
 app.use(bodyParser.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
+// 提供 Whisper 模型文件 (本地 ASR)
+app.use('/models', express.static(path.join(__dirname, 'models'), {
+    setHeaders: (res, path) => {
+        // 允许跨域访问
+        res.set('Access-Control-Allow-Origin', '*');
+        // ONNX 文件需要正确的 MIME 类型
+        if (path.endsWith('.onnx')) {
+            res.set('Content-Type', 'application/octet-stream');
+        }
+    }
+}));
+
 // 服务主页面
 app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'index.html'));
