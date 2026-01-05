@@ -6,6 +6,7 @@
     <title>AI Chat - AI 聊天</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script type="module" src="https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.2"></script>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
@@ -265,19 +266,63 @@
                 </div>
                 <hr class="border-gray-100">
                 <div class="space-y-3">
-                    <h3 class="text-sm font-bold text-gray-800">火山引擎语音识别设置 (ASR)</h3>
+                    <h3 class="text-sm font-bold text-gray-800">语音识别设置 (ASR)</h3>
                     <div>
-                        <label class="block text-sm font-medium text-gray-700 mb-1">Access Key (ASR)</label>
-                        <input type="password" id="volcToken" placeholder="火山引擎 Access Key"
-                               class="w-full px-4 py-3 md:py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-base">
-                    </div>
-                    <div>
-                        <label class="block text-sm font-medium text-gray-700 mb-1">ASR Resource ID (资源标识)</label>
-                        <select id="volcCluster"
+                        <label class="block text-sm font-medium text-gray-700 mb-1">ASR 模式</label>
+                        <select id="asrMode"
                                 class="w-full px-4 py-3 md:py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-base">
-                            <option value="volcengine_streaming_common">volcengine_streaming_common (中文)</option>
-                            <option value="volcengine_streaming_en">volcengine_streaming_en (英文)</option>
+                            <option value="cloud">☁️ 云端 ASR (火山引擎)</option>
+                            <option value="local">📱 本地 ASR (Whisper)</option>
                         </select>
+                        <p class="text-[10px] text-gray-400 mt-1">本地模式完全离线运行，首次需下载模型(~75MB)</p>
+                    </div>
+                    <div id="cloudAsrSettings">
+                        <div class="mb-3">
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Access Key (ASR)</label>
+                            <input type="password" id="volcToken" placeholder="火山引擎 Access Key"
+                                   class="w-full px-4 py-3 md:py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-base">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">ASR Resource ID (资源标识)</label>
+                            <select id="volcCluster"
+                                    class="w-full px-4 py-3 md:py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-base">
+                                <option value="volcengine_streaming_common">volcengine_streaming_common (中文)</option>
+                                <option value="volcengine_streaming_en">volcengine_streaming_en (英文)</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div id="localAsrSettings" class="hidden">
+                        <div class="mb-3">
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Whisper 模型</label>
+                            <select id="whisperModel"
+                                    class="w-full px-4 py-3 md:py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-base">
+                                <option value="Xenova/whisper-tiny">whisper-tiny (~75MB, 快速)</option>
+                                <option value="Xenova/whisper-base">whisper-base (~142MB, 更准确)</option>
+                                <option value="Xenova/whisper-small">whisper-small (~466MB, 高准确)</option>
+                            </select>
+                            <p class="text-[10px] text-gray-400 mt-1">模型越大越准确，但加载和推理时间更长</p>
+                        </div>
+                        <div class="mb-3">
+                            <label class="block text-sm font-medium text-gray-700 mb-1">识别语言</label>
+                            <select id="whisperLanguage"
+                                    class="w-full px-4 py-3 md:py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-base">
+                                <option value="chinese">中文</option>
+                                <option value="english">英文</option>
+                                <option value="auto">自动检测</option>
+                            </select>
+                        </div>
+                        <div id="whisperModelStatus" class="p-3 bg-gray-50 rounded-lg">
+                            <div class="flex items-center justify-between">
+                                <span class="text-sm text-gray-600">模型状态:</span>
+                                <span id="whisperModelStatusText" class="text-sm font-medium text-gray-500">未加载</span>
+                            </div>
+                            <div id="whisperModelProgress" class="hidden mt-2">
+                                <div class="w-full bg-gray-200 rounded-full h-2">
+                                    <div id="whisperProgressBar" class="bg-blue-500 h-2 rounded-full transition-all duration-300" style="width: 0%"></div>
+                                </div>
+                                <p id="whisperProgressText" class="text-[10px] text-gray-500 mt-1 text-center">下载中...</p>
+                            </div>
+                        </div>
                     </div>
                 </div>
                 <hr class="border-gray-100 hidden">
@@ -532,7 +577,14 @@
             voiceChatVadActive: false, // Voice Activity Detection state
             voiceChatSpeechDetected: false, // Whether speech was detected in current session
             voiceChatProcessing: false, // Whether processing ASR/LLM/TTS
-            voiceChatSpeechStartChunkIndex: -1 // Chunk index when speech started
+            voiceChatSpeechStartChunkIndex: -1, // Chunk index when speech started
+            // Local ASR State
+            asrMode: localStorage.getItem('asr_mode') || 'cloud', // 'cloud' or 'local'
+            whisperModel: localStorage.getItem('whisper_model') || 'Xenova/whisper-tiny',
+            whisperLanguage: localStorage.getItem('whisper_language') || 'chinese',
+            whisperPipeline: null, // Whisper pipeline instance
+            whisperModelLoaded: false, // Whether Whisper model is loaded
+            whisperModelLoading: false // Whether Whisper model is currently loading
         };
 
         // Audio Helpers
@@ -643,6 +695,17 @@
             autoTtsThreshold: document.getElementById('autoTtsThreshold'),
             autoTtsThresholdContainer: document.getElementById('autoTtsThresholdContainer'),
             replicateToken: document.getElementById('replicateToken'),
+            // 本地 ASR 元素
+            asrMode: document.getElementById('asrMode'),
+            cloudAsrSettings: document.getElementById('cloudAsrSettings'),
+            localAsrSettings: document.getElementById('localAsrSettings'),
+            whisperModel: document.getElementById('whisperModel'),
+            whisperLanguage: document.getElementById('whisperLanguage'),
+            whisperModelStatus: document.getElementById('whisperModelStatus'),
+            whisperModelStatusText: document.getElementById('whisperModelStatusText'),
+            whisperModelProgress: document.getElementById('whisperModelProgress'),
+            whisperProgressBar: document.getElementById('whisperProgressBar'),
+            whisperProgressText: document.getElementById('whisperProgressText'),
             replicateModel: document.getElementById('replicateModel'),
             activeRoleName: document.getElementById('activeRoleName'),
             activeRoleDesc: document.getElementById('activeRoleDesc'),
@@ -717,10 +780,42 @@
             if (state.autoTtsEnabled) elements.autoTtsThresholdContainer.classList.remove('hidden');
             elements.replicateToken.value = state.replicateToken;
             elements.replicateModel.value = state.replicateModel;
+            // 初始化本地 ASR 设置
+            elements.asrMode.value = state.asrMode;
+            elements.whisperModel.value = state.whisperModel;
+            elements.whisperLanguage.value = state.whisperLanguage;
+            updateAsrModeUI();
             if (state.apiKey) {
                 fetchModels();
             }
             setupEventListeners();
+        }
+
+        // 更新 ASR 模式 UI
+        function updateAsrModeUI() {
+            if (state.asrMode === 'local') {
+                elements.cloudAsrSettings.classList.add('hidden');
+                elements.localAsrSettings.classList.remove('hidden');
+                updateWhisperModelStatus();
+            } else {
+                elements.cloudAsrSettings.classList.remove('hidden');
+                elements.localAsrSettings.classList.add('hidden');
+            }
+        }
+
+        // 更新 Whisper 模型状态显示
+        function updateWhisperModelStatus() {
+            if (state.whisperModelLoading) {
+                elements.whisperModelStatusText.textContent = '加载中...';
+                elements.whisperModelStatusText.className = 'text-sm font-medium text-yellow-500';
+            } else if (state.whisperModelLoaded) {
+                elements.whisperModelStatusText.textContent = '已加载 ✓';
+                elements.whisperModelStatusText.className = 'text-sm font-medium text-green-500';
+                elements.whisperModelProgress.classList.add('hidden');
+            } else {
+                elements.whisperModelStatusText.textContent = '未加载';
+                elements.whisperModelStatusText.className = 'text-sm font-medium text-gray-500';
+            }
         }
 
         // 更新 TTS 模式 UI
@@ -805,6 +900,10 @@
                 state.autoTtsThreshold = parseInt(elements.autoTtsThreshold.value) || 100;
                 state.replicateToken = elements.replicateToken.value;
                 state.replicateModel = elements.replicateModel.value;
+                // 保存本地 ASR 设置
+                state.asrMode = elements.asrMode.value;
+                state.whisperModel = elements.whisperModel.value;
+                state.whisperLanguage = elements.whisperLanguage.value;
 
                 localStorage.setItem('openrouter_api_key', state.apiKey);
                 localStorage.setItem('selected_model', state.selectedModel);
@@ -823,9 +922,19 @@
                 localStorage.setItem('auto_tts_threshold', state.autoTtsThreshold);
                 localStorage.setItem('replicate_token', state.replicateToken);
                 localStorage.setItem('replicate_model', state.replicateModel);
+                // 保存本地 ASR 设置到 localStorage
+                localStorage.setItem('asr_mode', state.asrMode);
+                localStorage.setItem('whisper_model', state.whisperModel);
+                localStorage.setItem('whisper_language', state.whisperLanguage);
 
                 elements.settingsModal.classList.add('hidden');
                 checkInputs();
+            };
+
+            // ASR 模式切换事件
+            elements.asrMode.onchange = () => {
+                state.asrMode = elements.asrMode.value;
+                updateAsrModeUI();
             };
 
             // TTS 模式切换事件
@@ -3735,6 +3844,16 @@ ${conversationText}
         }
 
         async function performASR(audioBlob) {
+            // 根据 ASR 模式选择云端或本地
+            if (state.asrMode === 'local') {
+                return await performLocalASR(audioBlob);
+            } else {
+                return await performCloudASR(audioBlob);
+            }
+        }
+
+        // 云端 ASR (火山引擎)
+        async function performCloudASR(audioBlob) {
             const formData = new FormData();
             const ext = audioBlob.type.includes('mp4') ? 'mp4' : audioBlob.type.includes('webm') ? 'webm' : 'audio';
             formData.append('audio', audioBlob, `recording.${ext}`);
@@ -3749,6 +3868,171 @@ ${conversationText}
 
             const data = await resp.json();
             return data.text || null;
+        }
+
+        // 本地 ASR (Whisper via transformers.js)
+        async function performLocalASR(audioBlob) {
+            const startTime = performance.now();
+            console.log('[LocalASR] ========== 开始本地 ASR 处理 ==========');
+            console.log(`[LocalASR] 音频大小: ${(audioBlob.size / 1024).toFixed(2)} KB`);
+
+            try {
+                // 确保模型已加载
+                if (!state.whisperPipeline) {
+                    console.log('[LocalASR] 模型未加载，开始加载...');
+                    await loadWhisperModel();
+                }
+
+                // 将音频 Blob 转换为 AudioBuffer
+                const audioBuffer = await blobToAudioBuffer(audioBlob);
+                console.log(`[LocalASR] 音频转换完成: ${audioBuffer.duration.toFixed(2)}s, ${audioBuffer.sampleRate}Hz`);
+
+                // 重采样到 16kHz (Whisper 要求)
+                const resampledAudio = await resampleAudio(audioBuffer, 16000);
+                console.log(`[LocalASR] 重采样完成: ${resampledAudio.length} samples`);
+
+                // 运行 Whisper 推理
+                const inferenceStart = performance.now();
+                const languageMap = {
+                    'chinese': 'chinese',
+                    'english': 'english',
+                    'auto': null
+                };
+                const language = languageMap[state.whisperLanguage] || null;
+
+                const result = await state.whisperPipeline(resampledAudio, {
+                    language: language,
+                    task: 'transcribe',
+                    chunk_length_s: 30,
+                    stride_length_s: 5
+                });
+
+                const inferenceTime = performance.now() - inferenceStart;
+                console.log(`[LocalASR] 推理完成: ${inferenceTime.toFixed(2)}ms`);
+                console.log(`[LocalASR] 识别结果: "${result.text}"`);
+
+                const totalTime = performance.now() - startTime;
+                console.log(`[LocalASR] ========== 总耗时: ${totalTime.toFixed(2)}ms ==========`);
+
+                return result.text?.trim() || null;
+            } catch (err) {
+                console.error('[LocalASR] 错误:', err);
+                throw err;
+            }
+        }
+
+        // 加载 Whisper 模型
+        async function loadWhisperModel() {
+            if (state.whisperModelLoading) {
+                // 等待当前加载完成
+                while (state.whisperModelLoading) {
+                    await new Promise(resolve => setTimeout(resolve, 100));
+                }
+                return;
+            }
+
+            if (state.whisperPipeline) {
+                return; // 已加载
+            }
+
+            state.whisperModelLoading = true;
+            updateWhisperModelStatus();
+
+            // 显示进度条
+            elements.whisperModelProgress.classList.remove('hidden');
+            elements.whisperProgressText.textContent = '正在加载模型...';
+
+            try {
+                console.log(`[Whisper] 开始加载模型: ${state.whisperModel}`);
+
+                // 动态导入 transformers.js
+                const { pipeline, env } = await import('https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.2');
+
+                // 配置缓存
+                env.allowLocalModels = false;
+                env.useBrowserCache = true;
+
+                // 创建 pipeline 并跟踪下载进度
+                state.whisperPipeline = await pipeline('automatic-speech-recognition', state.whisperModel, {
+                    progress_callback: (progress) => {
+                        if (progress.status === 'downloading') {
+                            const percent = progress.progress ? Math.round(progress.progress) : 0;
+                            elements.whisperProgressBar.style.width = `${percent}%`;
+                            const fileName = progress.file || '';
+                            elements.whisperProgressText.textContent = `下载中: ${fileName} (${percent}%)`;
+                        } else if (progress.status === 'loading') {
+                            elements.whisperProgressText.textContent = '加载模型到内存...';
+                        } else if (progress.status === 'ready') {
+                            elements.whisperProgressBar.style.width = '100%';
+                            elements.whisperProgressText.textContent = '模型已就绪';
+                        }
+                    }
+                });
+
+                state.whisperModelLoaded = true;
+                console.log('[Whisper] 模型加载成功');
+            } catch (err) {
+                console.error('[Whisper] 模型加载失败:', err);
+                state.whisperPipeline = null;
+                elements.whisperProgressText.textContent = '加载失败: ' + err.message;
+                throw err;
+            } finally {
+                state.whisperModelLoading = false;
+                updateWhisperModelStatus();
+            }
+        }
+
+        // 将 Blob 转换为 AudioBuffer
+        async function blobToAudioBuffer(blob) {
+            const arrayBuffer = await blob.arrayBuffer();
+            const audioContext = getAudioContext();
+            return await audioContext.decodeAudioData(arrayBuffer);
+        }
+
+        // 重采样音频到目标采样率
+        async function resampleAudio(audioBuffer, targetSampleRate) {
+            const numChannels = audioBuffer.numberOfChannels;
+            const length = audioBuffer.length;
+            const sampleRate = audioBuffer.sampleRate;
+
+            // 获取音频数据（如果是立体声，转换为单声道）
+            let audioData;
+            if (numChannels === 1) {
+                audioData = audioBuffer.getChannelData(0);
+            } else {
+                // 混合多声道为单声道
+                audioData = new Float32Array(length);
+                for (let ch = 0; ch < numChannels; ch++) {
+                    const channelData = audioBuffer.getChannelData(ch);
+                    for (let i = 0; i < length; i++) {
+                        audioData[i] += channelData[i] / numChannels;
+                    }
+                }
+            }
+
+            // 如果采样率已经是目标采样率，直接返回
+            if (sampleRate === targetSampleRate) {
+                return audioData;
+            }
+
+            // 使用 OfflineAudioContext 进行高质量重采样
+            const duration = length / sampleRate;
+            const newLength = Math.round(duration * targetSampleRate);
+            const offlineCtx = new OfflineAudioContext(1, newLength, targetSampleRate);
+
+            // 创建源缓冲区
+            const sourceBuffer = offlineCtx.createBuffer(1, length, sampleRate);
+            sourceBuffer.getChannelData(0).set(audioData);
+
+            // 创建源节点
+            const sourceNode = offlineCtx.createBufferSource();
+            sourceNode.buffer = sourceBuffer;
+            sourceNode.connect(offlineCtx.destination);
+            sourceNode.start();
+
+            // 渲染
+            const renderedBuffer = await offlineCtx.startRendering();
+            return renderedBuffer.getChannelData(0);
         }
 
         async function performLLMChat(userMessage) {
