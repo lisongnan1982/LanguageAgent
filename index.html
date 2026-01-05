@@ -521,7 +521,74 @@
 
     </div>
 
+    <!-- 移动端调试面板 -->
+    <div id="debugPanel" class="fixed bottom-0 left-0 right-0 bg-black/90 text-green-400 text-xs font-mono z-[9999] hidden">
+        <div class="flex items-center justify-between px-2 py-1 bg-gray-800 border-b border-gray-600">
+            <span class="font-bold">🔧 调试日志</span>
+            <div class="flex gap-2">
+                <button onclick="clearDebugLog()" class="px-2 py-0.5 bg-red-600 text-white rounded text-xs">清空</button>
+                <button onclick="toggleDebugPanel()" class="px-2 py-0.5 bg-gray-600 text-white rounded text-xs">收起</button>
+            </div>
+        </div>
+        <div id="debugLog" class="max-h-48 overflow-y-auto p-2 space-y-0.5"></div>
+    </div>
+    <!-- 调试面板开关按钮 -->
+    <button id="debugToggleBtn" onclick="toggleDebugPanel()"
+            class="fixed bottom-4 left-4 w-10 h-10 bg-gray-800 text-white rounded-full shadow-lg z-[9998] text-lg hidden">
+        🔧
+    </button>
+
     <script>
+        // 调试日志系统
+        const debugLogs = [];
+        const maxLogs = 100;
+
+        function debugLog(tag, message, type = 'info') {
+            const time = new Date().toLocaleTimeString('zh-CN', { hour12: false });
+            const logEntry = { time, tag, message, type };
+            debugLogs.push(logEntry);
+            if (debugLogs.length > maxLogs) debugLogs.shift();
+
+            // 更新UI
+            const logDiv = document.getElementById('debugLog');
+            if (logDiv) {
+                const colorClass = type === 'error' ? 'text-red-400' : type === 'warn' ? 'text-yellow-400' : 'text-green-400';
+                const entry = document.createElement('div');
+                entry.className = colorClass;
+                entry.textContent = `[${time}] [${tag}] ${typeof message === 'object' ? JSON.stringify(message) : message}`;
+                logDiv.appendChild(entry);
+                logDiv.scrollTop = logDiv.scrollHeight;
+            }
+
+            // 同时输出到原生控制台
+            const consoleMethod = type === 'error' ? console.error : type === 'warn' ? console.warn : console.log;
+            consoleMethod(`[${tag}]`, message);
+        }
+
+        function clearDebugLog() {
+            debugLogs.length = 0;
+            const logDiv = document.getElementById('debugLog');
+            if (logDiv) logDiv.innerHTML = '';
+        }
+
+        function toggleDebugPanel() {
+            const panel = document.getElementById('debugPanel');
+            const btn = document.getElementById('debugToggleBtn');
+            if (panel.classList.contains('hidden')) {
+                panel.classList.remove('hidden');
+                btn.classList.add('hidden');
+            } else {
+                panel.classList.add('hidden');
+                btn.classList.remove('hidden');
+            }
+        }
+
+        // 在本地 ASR 模式下显示调试按钮
+        function showDebugButton() {
+            const btn = document.getElementById('debugToggleBtn');
+            if (btn) btn.classList.remove('hidden');
+        }
+
         // State Management
         const state = {
             apiKey: localStorage.getItem('openrouter_api_key') || '',
@@ -3872,47 +3939,33 @@ ${conversationText}
 
         // 本地 ASR (Whisper via transformers.js)
         async function performLocalASR(audioBlob) {
+            showDebugButton(); // 显示调试按钮
             const startTime = performance.now();
-            console.log('[LocalASR] ========== 开始本地 ASR 处理 ==========');
-            console.log(`[LocalASR] 音频 Blob 类型: ${audioBlob.type}`);
-            console.log(`[LocalASR] 音频大小: ${(audioBlob.size / 1024).toFixed(2)} KB`);
-            console.log(`[LocalASR] 当前 ASR 模式: ${state.asrMode}`);
-            console.log(`[LocalASR] Whisper 模型: ${state.whisperModel}`);
-            console.log(`[LocalASR] Whisper 语言: ${state.whisperLanguage}`);
-            console.log(`[LocalASR] Pipeline 状态: ${state.whisperPipeline ? '已加载' : '未加载'}`);
+            debugLog('LocalASR', '========== 开始本地 ASR 处理 ==========');
+            debugLog('LocalASR', `音频类型: ${audioBlob.type}, 大小: ${(audioBlob.size / 1024).toFixed(2)} KB`);
+            debugLog('LocalASR', `模型: ${state.whisperModel}, 语言: ${state.whisperLanguage}`);
+            debugLog('LocalASR', `Pipeline 状态: ${state.whisperPipeline ? '已加载' : '未加载'}`);
 
             try {
                 // 确保模型已加载
                 if (!state.whisperPipeline) {
-                    console.log('[LocalASR] 模型未加载，开始加载...');
+                    debugLog('LocalASR', '模型未加载，开始加载...', 'warn');
                     await loadWhisperModel();
-                    console.log('[LocalASR] 模型加载完成，Pipeline:', state.whisperPipeline);
+                    debugLog('LocalASR', '模型加载完成');
                 }
 
                 // 将音频 Blob 转换为 AudioBuffer
-                console.log('[LocalASR] 开始转换音频 Blob 到 AudioBuffer...');
+                debugLog('LocalASR', '转换音频 Blob 到 AudioBuffer...');
                 const audioBuffer = await blobToAudioBuffer(audioBlob);
-                console.log(`[LocalASR] 音频转换完成:`);
-                console.log(`  - 时长: ${audioBuffer.duration.toFixed(2)}s`);
-                console.log(`  - 采样率: ${audioBuffer.sampleRate}Hz`);
-                console.log(`  - 声道数: ${audioBuffer.numberOfChannels}`);
-                console.log(`  - 样本数: ${audioBuffer.length}`);
+                debugLog('LocalASR', `音频: ${audioBuffer.duration.toFixed(2)}s, ${audioBuffer.sampleRate}Hz, ${audioBuffer.numberOfChannels}声道`);
 
                 // 重采样到 16kHz (Whisper 要求)
-                console.log('[LocalASR] 开始重采样到 16kHz...');
+                debugLog('LocalASR', '重采样到 16kHz...');
                 const resampledAudio = await resampleAudio(audioBuffer, 16000);
-                console.log(`[LocalASR] 重采样完成: ${resampledAudio.length} samples (${(resampledAudio.length / 16000).toFixed(2)}s)`);
-
-                // 检查音频数据有效性
-                const audioStats = {
-                    min: Math.min(...resampledAudio),
-                    max: Math.max(...resampledAudio),
-                    mean: resampledAudio.reduce((a, b) => a + b, 0) / resampledAudio.length
-                };
-                console.log(`[LocalASR] 音频数据统计: min=${audioStats.min.toFixed(4)}, max=${audioStats.max.toFixed(4)}, mean=${audioStats.mean.toFixed(6)}`);
+                debugLog('LocalASR', `重采样完成: ${resampledAudio.length} 样本 (${(resampledAudio.length / 16000).toFixed(2)}s)`);
 
                 // 运行 Whisper 推理
-                console.log('[LocalASR] 开始 Whisper 推理...');
+                debugLog('LocalASR', '开始 Whisper 推理...');
                 const inferenceStart = performance.now();
                 const languageMap = {
                     'chinese': 'chinese',
@@ -3920,7 +3973,6 @@ ${conversationText}
                     'auto': null
                 };
                 const language = languageMap[state.whisperLanguage] || null;
-                console.log(`[LocalASR] 推理参数: language=${language}, task=transcribe`);
 
                 const result = await state.whisperPipeline(resampledAudio, {
                     language: language,
@@ -3930,132 +3982,100 @@ ${conversationText}
                 });
 
                 const inferenceTime = performance.now() - inferenceStart;
-                console.log(`[LocalASR] 推理完成: ${inferenceTime.toFixed(2)}ms`);
-                console.log(`[LocalASR] 原始结果:`, result);
-                console.log(`[LocalASR] 识别文本: "${result.text}"`);
+                debugLog('LocalASR', `推理完成: ${inferenceTime.toFixed(0)}ms`);
+                debugLog('LocalASR', `识别结果: "${result.text}"`);
 
                 const totalTime = performance.now() - startTime;
-                console.log(`[LocalASR] ========== 总耗时: ${totalTime.toFixed(2)}ms ==========`);
+                debugLog('LocalASR', `========== 总耗时: ${totalTime.toFixed(0)}ms ==========`);
 
                 return result.text?.trim() || null;
             } catch (err) {
-                console.error('[LocalASR] ========== 错误详情 ==========');
-                console.error('[LocalASR] 错误类型:', err.name);
-                console.error('[LocalASR] 错误消息:', err.message);
-                console.error('[LocalASR] 错误堆栈:', err.stack);
-                console.error('[LocalASR] 当前状态:', {
-                    asrMode: state.asrMode,
-                    whisperModel: state.whisperModel,
-                    whisperLanguage: state.whisperLanguage,
-                    pipelineLoaded: !!state.whisperPipeline,
-                    modelLoading: state.whisperModelLoading,
-                    modelLoaded: state.whisperModelLoaded
-                });
+                debugLog('LocalASR', `错误: ${err.name} - ${err.message}`, 'error');
+                debugLog('LocalASR', `堆栈: ${err.stack}`, 'error');
                 throw err;
             }
         }
 
         // 加载 Whisper 模型
         async function loadWhisperModel() {
-            console.log('[Whisper] ========== 开始加载 Whisper 模型 ==========');
-            console.log(`[Whisper] 目标模型: ${state.whisperModel}`);
-            console.log(`[Whisper] 当前状态: loading=${state.whisperModelLoading}, loaded=${state.whisperModelLoaded}`);
+            debugLog('Whisper', '========== 开始加载模型 ==========');
+            debugLog('Whisper', `目标模型: ${state.whisperModel}`);
 
             if (state.whisperModelLoading) {
-                console.log('[Whisper] 模型正在加载中，等待...');
-                // 等待当前加载完成
+                debugLog('Whisper', '模型正在加载中，等待...', 'warn');
                 let waitCount = 0;
                 while (state.whisperModelLoading) {
                     await new Promise(resolve => setTimeout(resolve, 100));
                     waitCount++;
                     if (waitCount % 50 === 0) {
-                        console.log(`[Whisper] 仍在等待加载完成... (${waitCount * 100}ms)`);
+                        debugLog('Whisper', `等待中... (${waitCount * 100}ms)`);
                     }
                 }
-                console.log('[Whisper] 等待完成');
                 return;
             }
 
             if (state.whisperPipeline) {
-                console.log('[Whisper] 模型已加载，跳过');
-                return; // 已加载
+                debugLog('Whisper', '模型已加载，跳过');
+                return;
             }
 
             state.whisperModelLoading = true;
             updateWhisperModelStatus();
 
-            // 显示进度条
             if (elements.whisperModelProgress) {
                 elements.whisperModelProgress.classList.remove('hidden');
                 elements.whisperProgressText.textContent = '正在加载模型...';
             }
 
             try {
-                console.log(`[Whisper] 步骤 1: 动态导入 transformers.js...`);
+                debugLog('Whisper', '步骤1: 导入 transformers.js...');
                 const importStart = performance.now();
 
-                // 动态导入 transformers.js
                 const transformersModule = await import('https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.2');
                 const { pipeline, env } = transformersModule;
 
-                console.log(`[Whisper] transformers.js 导入成功 (${(performance.now() - importStart).toFixed(0)}ms)`);
-                console.log(`[Whisper] 导入的模块:`, Object.keys(transformersModule));
+                debugLog('Whisper', `transformers.js 导入成功 (${(performance.now() - importStart).toFixed(0)}ms)`);
 
-                // 配置缓存
-                console.log('[Whisper] 步骤 2: 配置环境...');
                 env.allowLocalModels = false;
                 env.useBrowserCache = true;
-                console.log(`[Whisper] env.allowLocalModels = ${env.allowLocalModels}`);
-                console.log(`[Whisper] env.useBrowserCache = ${env.useBrowserCache}`);
+                debugLog('Whisper', '步骤2: 环境配置完成');
 
-                // 创建 pipeline 并跟踪下载进度
-                console.log(`[Whisper] 步骤 3: 创建 ASR pipeline (模型: ${state.whisperModel})...`);
+                debugLog('Whisper', `步骤3: 创建 pipeline (${state.whisperModel})...`);
                 const pipelineStart = performance.now();
 
                 state.whisperPipeline = await pipeline('automatic-speech-recognition', state.whisperModel, {
                     progress_callback: (progress) => {
-                        console.log(`[Whisper] 进度回调:`, progress);
                         if (progress.status === 'downloading') {
                             const percent = progress.progress ? Math.round(progress.progress) : 0;
+                            const fileName = progress.file || '';
+                            debugLog('Whisper', `下载: ${fileName} (${percent}%)`);
                             if (elements.whisperProgressBar) {
                                 elements.whisperProgressBar.style.width = `${percent}%`;
                             }
-                            const fileName = progress.file || '';
                             if (elements.whisperProgressText) {
                                 elements.whisperProgressText.textContent = `下载中: ${fileName} (${percent}%)`;
                             }
-                            console.log(`[Whisper] 下载进度: ${fileName} - ${percent}%`);
                         } else if (progress.status === 'loading') {
+                            debugLog('Whisper', '加载模型到内存...');
                             if (elements.whisperProgressText) {
                                 elements.whisperProgressText.textContent = '加载模型到内存...';
                             }
-                            console.log('[Whisper] 正在加载模型到内存...');
                         } else if (progress.status === 'ready') {
-                            if (elements.whisperProgressBar) {
-                                elements.whisperProgressBar.style.width = '100%';
-                            }
-                            if (elements.whisperProgressText) {
-                                elements.whisperProgressText.textContent = '模型已就绪';
-                            }
-                            console.log('[Whisper] 模型已就绪');
+                            debugLog('Whisper', '模型就绪');
                         } else if (progress.status === 'initiate') {
-                            console.log(`[Whisper] 开始下载: ${progress.file}`);
+                            debugLog('Whisper', `开始: ${progress.file}`);
                         } else if (progress.status === 'done') {
-                            console.log(`[Whisper] 下载完成: ${progress.file}`);
+                            debugLog('Whisper', `完成: ${progress.file}`);
                         }
                     }
                 });
 
-                console.log(`[Whisper] Pipeline 创建成功 (${(performance.now() - pipelineStart).toFixed(0)}ms)`);
-                console.log('[Whisper] Pipeline 对象:', state.whisperPipeline);
-
+                debugLog('Whisper', `Pipeline 创建成功 (${(performance.now() - pipelineStart).toFixed(0)}ms)`);
                 state.whisperModelLoaded = true;
-                console.log('[Whisper] ========== 模型加载成功 ==========');
+                debugLog('Whisper', '========== 模型加载成功 ==========');
             } catch (err) {
-                console.error('[Whisper] ========== 模型加载失败 ==========');
-                console.error('[Whisper] 错误类型:', err.name);
-                console.error('[Whisper] 错误消息:', err.message);
-                console.error('[Whisper] 错误堆栈:', err.stack);
+                debugLog('Whisper', `加载失败: ${err.name} - ${err.message}`, 'error');
+                debugLog('Whisper', `堆栈: ${err.stack}`, 'error');
                 state.whisperPipeline = null;
                 if (elements.whisperProgressText) {
                     elements.whisperProgressText.textContent = '加载失败: ' + err.message;
@@ -4069,43 +4089,36 @@ ${conversationText}
 
         // 将 Blob 转换为 AudioBuffer
         async function blobToAudioBuffer(blob) {
-            console.log('[AudioConvert] 开始转换 Blob 到 AudioBuffer...');
-            console.log(`[AudioConvert] Blob 类型: ${blob.type}, 大小: ${blob.size} bytes`);
+            debugLog('Audio', `Blob: ${blob.type}, ${blob.size} bytes`);
 
             try {
                 const arrayBuffer = await blob.arrayBuffer();
-                console.log(`[AudioConvert] ArrayBuffer 大小: ${arrayBuffer.byteLength} bytes`);
+                debugLog('Audio', `ArrayBuffer: ${arrayBuffer.byteLength} bytes`);
 
                 const audioContext = getAudioContext();
-                console.log(`[AudioConvert] AudioContext 状态: ${audioContext.state}, 采样率: ${audioContext.sampleRate}Hz`);
+                debugLog('Audio', `AudioContext: ${audioContext.state}, ${audioContext.sampleRate}Hz`);
 
                 const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
-                console.log('[AudioConvert] 解码成功');
+                debugLog('Audio', '解码成功');
                 return audioBuffer;
             } catch (err) {
-                console.error('[AudioConvert] 解码失败:', err);
-                console.error('[AudioConvert] 这可能是因为浏览器不支持该音频格式');
+                debugLog('Audio', `解码失败: ${err.message}`, 'error');
+                debugLog('Audio', '可能是浏览器不支持该音频格式', 'error');
                 throw err;
             }
         }
 
         // 重采样音频到目标采样率
         async function resampleAudio(audioBuffer, targetSampleRate) {
-            console.log('[Resample] 开始重采样...');
             const numChannels = audioBuffer.numberOfChannels;
             const length = audioBuffer.length;
             const sampleRate = audioBuffer.sampleRate;
-            console.log(`[Resample] 输入: ${numChannels}声道, ${length}样本, ${sampleRate}Hz`);
-            console.log(`[Resample] 目标采样率: ${targetSampleRate}Hz`);
+            debugLog('Resample', `${numChannels}声道, ${length}样本, ${sampleRate}Hz -> ${targetSampleRate}Hz`);
 
-            // 获取音频数据（如果是立体声，转换为单声道）
             let audioData;
             if (numChannels === 1) {
                 audioData = audioBuffer.getChannelData(0);
-                console.log('[Resample] 单声道，直接使用');
             } else {
-                // 混合多声道为单声道
-                console.log(`[Resample] ${numChannels}声道，混合为单声道`);
                 audioData = new Float32Array(length);
                 for (let ch = 0; ch < numChannels; ch++) {
                     const channelData = audioBuffer.getChannelData(ch);
@@ -4115,32 +4128,25 @@ ${conversationText}
                 }
             }
 
-            // 如果采样率已经是目标采样率，直接返回
             if (sampleRate === targetSampleRate) {
-                console.log('[Resample] 采样率已匹配，无需重采样');
+                debugLog('Resample', '采样率已匹配');
                 return audioData;
             }
 
-            // 使用 OfflineAudioContext 进行高质量重采样
             const duration = length / sampleRate;
             const newLength = Math.round(duration * targetSampleRate);
-            console.log(`[Resample] 重采样: ${length} -> ${newLength} 样本`);
-
             const offlineCtx = new OfflineAudioContext(1, newLength, targetSampleRate);
 
-            // 创建源缓冲区
             const sourceBuffer = offlineCtx.createBuffer(1, length, sampleRate);
             sourceBuffer.getChannelData(0).set(audioData);
 
-            // 创建源节点
             const sourceNode = offlineCtx.createBufferSource();
             sourceNode.buffer = sourceBuffer;
             sourceNode.connect(offlineCtx.destination);
             sourceNode.start();
 
-            // 渲染
             const renderedBuffer = await offlineCtx.startRendering();
-            console.log('[Resample] 重采样完成');
+            debugLog('Resample', `完成: ${length} -> ${newLength} 样本`);
             return renderedBuffer.getChannelData(0);
         }
 
