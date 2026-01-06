@@ -1173,10 +1173,12 @@ app.post('/api/asr-bigmodel', upload.single('audio'), async (req, res) => {
         // 等待 Full Request 响应
         const fullResponse = await waitForBigmodelMessage(ws);
         timing.fullRequest = Date.now() - fullRequestStartTime;
+        console.log(`[BigModel-ASR] Full Request响应: ${JSON.stringify(fullResponse?.payloadMsg)}`);
         console.log(`[BigModel-ASR] Full Request耗时: ${timing.fullRequest} ms`);
 
-        if (fullResponse?.payloadMsg?.code !== 0) {
-            throw new Error(`Full Request failed: code=${fullResponse?.payloadMsg?.code}, message=${JSON.stringify(fullResponse?.payloadMsg)}`);
+        // 检查是否有明确的错误码 (code > 0 表示错误，undefined 或 0 表示成功)
+        if (fullResponse?.payloadMsg?.code && fullResponse.payloadMsg.code > 0) {
+            throw new Error(`Full Request failed: code=${fullResponse.payloadMsg.code}, message=${JSON.stringify(fullResponse.payloadMsg)}`);
         }
 
         // 4. 分段发送音频数据
