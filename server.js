@@ -1128,9 +1128,11 @@ app.post('/api/asr-bigmodel', upload.single('audio'), async (req, res) => {
         console.log(`[BigModel-ASR] FFmpeg转换耗时: ${timing.ffmpegConvert} ms, WAV大小: ${(wavBuffer.length / 1024).toFixed(2)} KB`);
 
         // 2. 建立 WebSocket 连接
-        const wsUrl = 'wss://openspeech.bytedance.com/api/v3/sauc/bigmodel';
+        // 支持三种模式: bigmodel (流式), bigmodel_async (异步), bigmodel_nostream (非流式)
+        const wsUrl = 'wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_nostream';
         const reqId = crypto.randomUUID();
 
+        // 按照Python SDK的header顺序构建
         const headers = {
             "X-Api-Resource-Id": "volc.bigasr.sauc.duration",
             "X-Api-Request-Id": reqId,
@@ -1139,6 +1141,9 @@ app.post('/api/asr-bigmodel', upload.single('audio'), async (req, res) => {
         };
 
         console.log(`[BigModel-ASR] 连接 WebSocket: ${wsUrl}`);
+        console.log(`[BigModel-ASR] Request-Id: ${reqId}`);
+        console.log(`[BigModel-ASR] App-Key: ${appKey.trim().substring(0, 8)}...`);
+        console.log(`[BigModel-ASR] Access-Key: ${accessKey.trim().substring(0, 8)}...`);
         const wsConnectStartTime = Date.now();
         ws = new WebSocket(wsUrl, { headers });
 
