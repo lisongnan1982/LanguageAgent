@@ -1202,7 +1202,7 @@ app.post('/api/asr-bigmodel', upload.single('audio'), async (req, res) => {
         }
         console.log(`[BigModel-ASR] 音频分块数: ${chunks.length}, 每块 ${SEGMENT_SIZE} bytes`);
 
-        // 发送音频块
+        // 发送音频块 (非流式模式可以快速发送所有数据)
         for (let i = 0; i < chunks.length; i++) {
             const chunk = chunks[i];
             const isLast = (i === chunks.length - 1);
@@ -1211,29 +1211,51 @@ app.post('/api/asr-bigmodel', upload.single('audio'), async (req, res) => {
             const audioRequest = constructBigmodelAudioRequest(seq, chunk, isLast);
             ws.send(audioRequest);
 
-            // 模拟实时流，按照音频时长发送
+            if (isLast) {
+                console.log(`[BigModel-ASR] 发送最后一个音频包, seq=${seq} (negated: ${-seq})`);
+            }
+
+            // 非流式模式下可以快速发送，但稍作间隔避免服务器压力
             if (!isLast) {
-                await new Promise(resolve => setTimeout(resolve, SEGMENT_DURATION_MS / 2));
+                await new Promise(resolve => setTimeout(resolve, 10));
             }
         }
         timing.audioChunks = Date.now() - audioChunksStartTime;
         console.log(`[BigModel-ASR] 音频发送耗时: ${timing.audioChunks} ms`);
 
-        // 5. 等待最终结果
+        // 5. 等待最终结果 (非流式模式需要更长超时，因为服务端处理完所有音频后才返回)
         const finalWaitStartTime = Date.now();
+        console.log(`[BigModel-ASR] 等待服务器响应...`);
         while (true) {
-            const response = await waitForBigmodelMessage(ws, 15000);
+            const response = await waitForBigmodelMessage(ws, 30000); // 30秒超时
+
+            console.log(`[BigModel-ASR] 收到响应: isLastPackage=${response?.isLastPackage}, code=${response?.code}`);
 
             if (response?.payloadMsg) {
                 const payload = response.payloadMsg;
+                console.log(`[BigModel-ASR] Payload: ${JSON.stringify(payload)}`);
+
+                // 检查 result 字段 - 可能是 string 或 object
                 if (payload.result) {
-                    finalResultText = payload.result;
-                    console.log(`[BigModel-ASR] 识别结果: "${finalResultText}"`);
+                    if (typeof payload.result === 'string') {
+                        finalResultText = payload.result;
+                    } else if (payload.result.text) {
+                        finalResultText = payload.result.text;
+                    }
+                    if (finalResultText) {
+                        console.log(`[BigModel-ASR] 识别结果: "${finalResultText}"`);
+                    }
                 }
             }
 
             if (response?.isLastPackage) {
                 console.log(`[BigModel-ASR] 收到最终包`);
+                break;
+            }
+
+            // 如果有错误码，也退出
+            if (response?.code && response.code !== 0) {
+                console.error(`[BigModel-ASR] 服务器返回错误码: ${response.code}`);
                 break;
             }
         }
