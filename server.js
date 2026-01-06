@@ -1134,7 +1134,7 @@ app.post('/api/asr-bigmodel', upload.single('audio'), async (req, res) => {
 
         // 按照Python SDK的header顺序构建
         const headers = {
-            "X-Api-Resource-Id": "volc.bigasr.sauc.duration",
+            "X-Api-Resource-Id": "volc.seedasr.sauc.duration",
             "X-Api-Request-Id": reqId,
             "X-Api-Access-Key": accessKey.trim(),
             "X-Api-App-Key": appKey.trim()
