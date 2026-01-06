@@ -1130,7 +1130,7 @@ app.post('/api/asr-bigmodel', upload.single('audio'), async (req, res) => {
         // 2. 建立 WebSocket 连接
         // 支持三种模式: bigmodel (流式), bigmodel_async (异步), bigmodel_nostream (非流式)
         // 使用流式模式，更适合发送完整音频后等待结果
-        const wsUrl = 'wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_nostream';
+        const wsUrl = 'wss://openspeech.bytedance.com/api/v3/sauc/bigmodel';
         const reqId = crypto.randomUUID();
 
         // 按照Python SDK的header顺序构建
