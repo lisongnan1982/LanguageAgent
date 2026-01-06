@@ -1149,7 +1149,18 @@ app.post('/api/asr-bigmodel', upload.single('audio'), async (req, res) => {
 
         await new Promise((resolve, reject) => {
             ws.on('open', resolve);
-            ws.on('error', reject);
+            ws.on('error', (err) => {
+                reject(err);
+            });
+            // 捕获 403 等 HTTP 错误的详细信息
+            ws.on('unexpected-response', (request, response) => {
+                let body = '';
+                response.on('data', chunk => body += chunk.toString());
+                response.on('end', () => {
+                    console.error(`[BigModel-ASR] HTTP Error ${response.statusCode}: ${body}`);
+                    reject(new Error(`HTTP ${response.statusCode}: ${body || response.statusMessage}`));
+                });
+            });
         });
         timing.wsConnect = Date.now() - wsConnectStartTime;
         console.log(`[BigModel-ASR] WebSocket连接耗时: ${timing.wsConnect} ms`);
