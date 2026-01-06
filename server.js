@@ -1129,6 +1129,7 @@ app.post('/api/asr-bigmodel', upload.single('audio'), async (req, res) => {
 
         // 2. 建立 WebSocket 连接
         // 支持三种模式: bigmodel (流式), bigmodel_async (异步), bigmodel_nostream (非流式)
+        // 使用流式模式，更适合发送完整音频后等待结果
         const wsUrl = 'wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_nostream';
         const reqId = crypto.randomUUID();
 
@@ -1202,7 +1203,7 @@ app.post('/api/asr-bigmodel', upload.single('audio'), async (req, res) => {
         }
         console.log(`[BigModel-ASR] 音频分块数: ${chunks.length}, 每块 ${SEGMENT_SIZE} bytes`);
 
-        // 发送音频块 (非流式模式可以快速发送所有数据)
+        // 发送音频块 (流式模式需要模拟实时发送)
         for (let i = 0; i < chunks.length; i++) {
             const chunk = chunks[i];
             const isLast = (i === chunks.length - 1);
@@ -1215,9 +1216,9 @@ app.post('/api/asr-bigmodel', upload.single('audio'), async (req, res) => {
                 console.log(`[BigModel-ASR] 发送最后一个音频包, seq=${seq} (negated: ${-seq})`);
             }
 
-            // 非流式模式下可以快速发送，但稍作间隔避免服务器压力
+            // 流式模式下模拟实时发送，间隔约为音频段时长的一半
             if (!isLast) {
-                await new Promise(resolve => setTimeout(resolve, 10));
+                await new Promise(resolve => setTimeout(resolve, SEGMENT_DURATION_MS / 2));
             }
         }
         timing.audioChunks = Date.now() - audioChunksStartTime;
