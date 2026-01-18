@@ -494,6 +494,36 @@ app.post('/api/proxy-llm', async (req, res) => {
                             })
                         });
                     }
+                } else if (toolCall.function.name === 'save_memory') {
+                    // 处理记忆保存工具
+                    try {
+                        const args = JSON.parse(toolCall.function.arguments);
+                        console.log('Save memory request:', args);
+
+                        // 记忆保存由前端处理，这里只返回成功响应
+                        toolResults.push({
+                            tool_call_id: toolCall.id,
+                            role: 'tool',
+                            name: 'save_memory',
+                            content: JSON.stringify({
+                                success: true,
+                                content: args.content,
+                                category: args.category || '其他',
+                                message: '记忆已保存'
+                            })
+                        });
+                    } catch (error) {
+                        console.error('Save memory error:', error.message);
+                        toolResults.push({
+                            tool_call_id: toolCall.id,
+                            role: 'tool',
+                            name: 'save_memory',
+                            content: JSON.stringify({
+                                success: false,
+                                error: `保存记忆失败: ${error.message}`
+                            })
+                        });
+                    }
                 }
             }
 

@@ -161,6 +161,9 @@
                     <button id="voiceChatBtn" class="p-2 md:p-2 min-w-[44px] min-h-[44px] flex items-center justify-center text-gray-400 hover:text-purple-500 active:text-purple-600 transition-colors hidden" title="语音对话">
                         <i class="fas fa-phone text-lg"></i>
                     </button>
+                    <button id="memoryBtn" class="p-2 md:p-2 min-w-[44px] min-h-[44px] flex items-center justify-center text-gray-400 hover:text-blue-500 active:text-blue-600 transition-colors hidden" title="查看记忆">
+                        <i class="fas fa-brain text-lg"></i>
+                    </button>
                     <button id="downloadAllBtn" class="p-2 md:p-2 min-w-[44px] min-h-[44px] flex items-center justify-center text-gray-400 hover:text-blue-500 active:text-blue-600 transition-colors hidden" title="合并下载所有已缓存音频">
                         <i class="fas fa-download text-lg"></i>
                     </button>
@@ -535,6 +538,25 @@
 
     </div>
 
+    <!-- Memory Modal -->
+    <div id="memoryModal" class="fixed inset-0 bg-black bg-opacity-50 hidden flex items-end md:items-center justify-center z-50 md:p-4">
+        <div class="bg-white rounded-t-2xl md:rounded-2xl p-4 md:p-6 w-full md:max-w-md shadow-xl max-h-[85vh] md:max-h-[90vh] flex flex-col">
+            <div class="flex items-center justify-between mb-4 flex-shrink-0">
+                <h2 class="text-xl font-bold"><i class="fas fa-brain mr-2 text-blue-500"></i>记忆</h2>
+                <button id="closeMemoryModal" class="p-2 -mr-2 text-gray-400 hover:text-gray-600">
+                    <i class="fas fa-times text-xl"></i>
+                </button>
+            </div>
+            <div id="memoryList" class="flex-1 overflow-y-auto space-y-3 allow-scroll">
+                <p class="text-gray-400 text-center py-8">暂无记忆</p>
+            </div>
+            <div class="flex gap-3 mt-4 pt-4 border-t border-gray-100 flex-shrink-0">
+                <button id="clearMemoryBtn" class="flex-1 px-4 py-3 md:py-2 text-red-600 hover:bg-red-50 active:bg-red-100 rounded-lg">清空记忆</button>
+                <button id="closeMemoryModalBtn" class="flex-1 px-4 py-3 md:py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 active:bg-blue-800">关闭</button>
+            </div>
+        </div>
+    </div>
+
     <!-- 移动端调试面板 -->
     <div id="debugPanel" class="fixed bottom-0 left-0 right-0 bg-black/90 text-green-400 text-xs font-mono z-[9999] hidden">
         <div class="flex items-center justify-between px-2 py-1 bg-gray-800 border-b border-gray-600">
@@ -640,6 +662,7 @@
             })(),
             currentRoleId: null,
             chatHistory: JSON.parse(localStorage.getItem('chat_history')) || {}, // roleId -> messages[]
+            memories: JSON.parse(localStorage.getItem('memories')) || {}, // roleId -> memory[]
             ttsCache: {}, // (text + voiceType) -> base64 audio
             currentAudio: null, // Track currently playing audio
             currentPlayingIndex: null, // Track which message index is currently playing
@@ -819,7 +842,14 @@
             closeSidebarBtn: document.getElementById('closeSidebarBtn'),
             roleListMobile: document.getElementById('roleListMobile'),
             addRoleBtnMobile: document.getElementById('addRoleBtnMobile'),
-            roleAvatarBtn: document.getElementById('roleAvatarBtn')
+            roleAvatarBtn: document.getElementById('roleAvatarBtn'),
+            // 记忆元素
+            memoryBtn: document.getElementById('memoryBtn'),
+            memoryModal: document.getElementById('memoryModal'),
+            closeMemoryModal: document.getElementById('closeMemoryModal'),
+            closeMemoryModalBtn: document.getElementById('closeMemoryModalBtn'),
+            clearMemoryBtn: document.getElementById('clearMemoryBtn'),
+            memoryList: document.getElementById('memoryList')
         };
 
         // Initialize
@@ -1129,14 +1159,38 @@
             };
 
             elements.clearChatBtn.onclick = () => {
-                if (state.currentRoleId && confirm('确定要清空与当前角色的对话记录吗？')) {
+                if (state.currentRoleId && confirm('确定要清空与当前角色的对话记录吗？这也会清除相关的记忆。')) {
                     state.chatHistory[state.currentRoleId] = [];
+                    clearMemories(state.currentRoleId);
                     saveChatHistory();
                     renderMessages();
                 }
             };
 
             elements.compressHistoryBtn.onclick = compressConversationHistory;
+
+            // 记忆按钮事件绑定
+            elements.memoryBtn.onclick = () => {
+                renderMemoryList();
+                elements.memoryModal.classList.remove('hidden');
+            };
+
+            elements.closeMemoryModal.onclick = () => elements.memoryModal.classList.add('hidden');
+            elements.closeMemoryModalBtn.onclick = () => elements.memoryModal.classList.add('hidden');
+
+            elements.clearMemoryBtn.onclick = () => {
+                if (confirm('确定要清空当前角色的所有记忆吗？')) {
+                    clearMemories(state.currentRoleId);
+                    renderMemoryList();
+                }
+            };
+
+            // 点击模态框背景关闭
+            elements.memoryModal.onclick = (e) => {
+                if (e.target === elements.memoryModal) {
+                    elements.memoryModal.classList.add('hidden');
+                }
+            };
 
             setupPlayAllButton();
             setupVoiceChat();
@@ -1264,6 +1318,49 @@
 
         function saveChatHistory() {
             localStorage.setItem('chat_history', JSON.stringify(state.chatHistory));
+        }
+
+        // 记忆管理函数
+        function saveMemories() {
+            localStorage.setItem('memories', JSON.stringify(state.memories));
+        }
+
+        function addMemory(roleId, content, category = '其他') {
+            if (!state.memories[roleId]) {
+                state.memories[roleId] = [];
+            }
+            state.memories[roleId].push({
+                content,
+                category,
+                timestamp: Date.now()
+            });
+            saveMemories();
+        }
+
+        function getMemories(roleId) {
+            return state.memories[roleId] || [];
+        }
+
+        function clearMemories(roleId) {
+            delete state.memories[roleId];
+            saveMemories();
+        }
+
+        function renderMemoryList() {
+            const memories = getMemories(state.currentRoleId);
+            if (memories.length === 0) {
+                elements.memoryList.innerHTML = '<p class="text-gray-400 text-center py-8">暂无记忆</p>';
+                return;
+            }
+            elements.memoryList.innerHTML = memories.map((m, i) => `
+                <div class="p-3 bg-gray-50 rounded-lg">
+                    <div class="flex items-center justify-between mb-1">
+                        <span class="text-xs px-2 py-0.5 bg-blue-100 text-blue-600 rounded">${m.category || '其他'}</span>
+                        <span class="text-xs text-gray-400">${new Date(m.timestamp).toLocaleDateString()}</span>
+                    </div>
+                    <p class="text-sm text-gray-700">${m.content}</p>
+                </div>
+            `).join('');
         }
 
         // 压缩对话历史，使用 LLM 生成摘要以减少上下文长度
@@ -1542,6 +1639,7 @@
                 elements.activeRoleHeader.querySelector('div').textContent = '?';
                 elements.clearChatBtn.classList.add('hidden');
                 elements.compressHistoryBtn.classList.add('hidden');
+                elements.memoryBtn.classList.add('hidden');
                 renderMessages(); // Clear messages view
             }
 
@@ -1745,6 +1843,7 @@ Respond ONLY with the JSON object. Do not include markdown code blocks.`;
             elements.downloadAllBtn.classList.remove('hidden');
             elements.compressHistoryBtn.classList.remove('hidden');
             elements.voiceChatBtn.classList.remove('hidden');
+            elements.memoryBtn.classList.remove('hidden');
 
             renderRoles();
             renderMessages();
@@ -3157,6 +3256,30 @@ ${conversationText}
             }
         };
 
+        // 定义记忆工具
+        const MEMORY_TOOL = {
+            type: 'function',
+            function: {
+                name: 'save_memory',
+                description: '保存重要的对话记忆。只在用户分享重要信息时使用此工具，例如：用户的名字、偏好、重要事件、关键决定等。不要频繁使用，只保存真正重要的信息。每次对话最多调用一次。',
+                parameters: {
+                    type: 'object',
+                    properties: {
+                        content: {
+                            type: 'string',
+                            description: '要保存的记忆内容，应该简洁且包含关键信息，不超过100字'
+                        },
+                        category: {
+                            type: 'string',
+                            description: '记忆分类',
+                            enum: ['用户信息', '偏好设置', '重要事件', '关键决定', '其他']
+                        }
+                    },
+                    required: ['content']
+                }
+            }
+        };
+
         async function sendMessage() {
             const content = elements.userInput.value.trim();
             if (!content || !state.apiKey || !state.currentRoleId) return;
@@ -3189,6 +3312,14 @@ ${conversationText}
             const regularMessages = historyMessages.filter(m => !m.isCompressed);
 
             let systemContent = role.prompt + formatInstruction;
+
+            // 注入记忆
+            const memories = getMemories(state.currentRoleId);
+            if (memories.length > 0) {
+                const memoryText = memories.map(m => `- [${m.category}] ${m.content}`).join('\n');
+                systemContent += '\n\n【关于用户的记忆】\n' + memoryText;
+            }
+
             if (compressedSummary) {
                 systemContent += '\n\n【之前的对话摘要】\n' + compressedSummary.content;
             }
@@ -3215,7 +3346,7 @@ ${conversationText}
                         apiKey: state.apiKey,
                         model: state.chatModel,
                         messages: messages,
-                        tools: [TEXT_TO_IMAGE_TOOL],
+                        tools: [TEXT_TO_IMAGE_TOOL, MEMORY_TOOL],
                         tool_choice: 'auto',
                         replicateToken: state.replicateToken,
                         replicateModel: state.replicateModel
@@ -3237,22 +3368,22 @@ ${conversationText}
                     const resultData = JSON.parse(toolResult.content);
 
                     // 调试日志
+                    console.log('Tool call:', toolCall.function.name);
                     console.log('Tool result:', toolResult);
                     console.log('Parsed result:', resultData);
-                    console.log('Image URL:', resultData.imageUrl);
 
                     // 将工具调用添加到 API 消息历史（用于后续调用），但不添加到 chatHistory（用于显示）
                     messages.push(data.choices[0].message);
                     messages.push(toolResult);
 
-                    // 如果图片生成成功，在 AI 消息中显示图片
-                    if (resultData.success && resultData.imageUrl) {
-                        aiMsg.content = `正在生成图片...`;
-                        aiMsg.imageUrl = resultData.imageUrl;
-                        aiMsg.imagePrompt = resultData.prompt;
-                        renderMessages();
-
-                        // 第二次调用 LLM，让它根据工具结果生成回复
+                    // 根据工具类型处理
+                    if (toolCall.function.name === 'save_memory') {
+                        // 处理记忆保存工具 - 实际保存到本地存储
+                        if (resultData.success && resultData.content) {
+                            addMemory(state.currentRoleId, resultData.content, resultData.category || '其他');
+                            console.log('Memory saved to localStorage:', resultData.content);
+                        }
+                        // 继续调用 LLM 生成正常回复
                         response = await fetch('/api/proxy-llm', {
                             method: 'POST',
                             headers: {
@@ -3271,18 +3402,51 @@ ${conversationText}
 
                         data = await response.json();
                         if (data.choices && data.choices[0]) {
-                            // 移除 LLM 返回内容中的 markdown 图片（避免重复显示）
-                            let content = data.choices[0].message.content;
-                            // 移除 markdown 图片语法: ![alt](url)
-                            content = content.replace(/!\[([^\]]*)\]\([^)]+\)/g, '');
-                            // 移除可能的纯 URL 图片链接
-                            content = content.replace(/https?:\/\/[^\s]+\.(png|jpg|jpeg|gif|webp)[^\s]*/gi, '');
-                            // 清理多余的空行
-                            content = content.replace(/\n{3,}/g, '\n\n').trim();
-                            aiMsg.content = content;
+                            aiMsg.content = data.choices[0].message.content;
                         }
-                    } else if (resultData.error) {
-                        aiMsg.content = `图片生成失败：${resultData.error}`;
+                    } else if (toolCall.function.name === 'generate_image') {
+                        // 处理图片生成工具
+                        console.log('Image URL:', resultData.imageUrl);
+
+                        // 如果图片生成成功，在 AI 消息中显示图片
+                        if (resultData.success && resultData.imageUrl) {
+                            aiMsg.content = `正在生成图片...`;
+                            aiMsg.imageUrl = resultData.imageUrl;
+                            aiMsg.imagePrompt = resultData.prompt;
+                            renderMessages();
+
+                            // 第二次调用 LLM，让它根据工具结果生成回复
+                            response = await fetch('/api/proxy-llm', {
+                                method: 'POST',
+                                headers: {
+                                    'Content-Type': 'application/json'
+                                },
+                                body: JSON.stringify({
+                                    apiKey: state.apiKey,
+                                    model: state.chatModel,
+                                    messages: messages
+                                })
+                            });
+
+                            if (!response.ok) {
+                                throw new Error('Second LLM call failed');
+                            }
+
+                            data = await response.json();
+                            if (data.choices && data.choices[0]) {
+                                // 移除 LLM 返回内容中的 markdown 图片（避免重复显示）
+                                let content = data.choices[0].message.content;
+                                // 移除 markdown 图片语法: ![alt](url)
+                                content = content.replace(/!\[([^\]]*)\]\([^)]+\)/g, '');
+                                // 移除可能的纯 URL 图片链接
+                                content = content.replace(/https?:\/\/[^\s]+\.(png|jpg|jpeg|gif|webp)[^\s]*/gi, '');
+                                // 清理多余的空行
+                                content = content.replace(/\n{3,}/g, '\n\n').trim();
+                                aiMsg.content = content;
+                            }
+                        } else if (resultData.error) {
+                            aiMsg.content = `图片生成失败：${resultData.error}`;
+                        }
                     }
                 } else {
                     // 没有工具调用，正常回复
