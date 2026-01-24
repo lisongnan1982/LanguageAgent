@@ -1386,7 +1386,7 @@
 
             // 确认压缩
             const msgCount = messages.length;
-            if (!confirm(`当前有 ${msgCount} 条对话记录。\n\n压缩后将保留最近2条对话，其余内容将被压缩为摘要。\n\n确定要压缩对话历史吗？`)) {
+            if (!confirm(`当前有 ${msgCount} 条对话记录。\n\n压缩后将保留最近5次对话（约10条消息），其余内容将被压缩为摘要，重要信息将被保存到记忆中。\n\n确定要压缩对话历史吗？`)) {
                 return;
             }
 
@@ -1398,9 +1398,9 @@
             btn.disabled = true;
 
             try {
-                // 保留最近的2条消息
-                const recentMessages = messages.slice(-2);
-                const toCompress = messages.slice(0, -2);
+                // 保留最近的5次对话（约10条消息：5条用户 + 5条助手）
+                const recentMessages = messages.slice(-10);
+                const toCompress = messages.slice(0, -10);
 
                 if (toCompress.length === 0) {
                     alert('没有需要压缩的内容');
@@ -1454,6 +1454,69 @@
                     throw new Error('无法生成摘要');
                 }
 
+                // 调用 LLM 提取重要记忆并保存
+                let savedMemoryCount = 0;
+                try {
+                    const memoryResponse = await fetch('/api/proxy-llm', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            apiKey: state.apiKey,
+                            model: state.chatModel,
+                            messages: [
+                                {
+                                    role: 'system',
+                                    content: `你是一个记忆提取助手。请从以下对话历史中提取需要长期记住的重要信息。
+
+要求：
+1. 只提取真正重要的信息，如：用户的名字、偏好、重要事件、关键决定等
+2. 每条记忆应简洁，不超过100字
+3. 最多提取5条最重要的记忆
+4. 返回 JSON 数组格式，每条记忆包含 content（内容）和 category（分类）
+5. 分类只能是：用户信息、偏好设置、重要事件、关键决定、其他
+6. 如果没有值得记住的信息，返回空数组 []
+
+返回格式示例：
+[{"content": "用户叫小明", "category": "用户信息"}, {"content": "用户喜欢蓝色", "category": "偏好设置"}]`
+                                },
+                                {
+                                    role: 'user',
+                                    content: `请从以下对话中提取重要记忆：\n\n${conversationText}`
+                                }
+                            ]
+                        })
+                    });
+
+                    if (memoryResponse.ok) {
+                        const memoryData = await memoryResponse.json();
+                        const memoryContent = memoryData.choices?.[0]?.message?.content;
+                        if (memoryContent) {
+                            try {
+                                // 尝试解析 JSON，处理可能的 markdown 代码块包裹
+                                let jsonStr = memoryContent.trim();
+                                if (jsonStr.startsWith('```')) {
+                                    jsonStr = jsonStr.replace(/```json?\n?/g, '').replace(/```$/g, '').trim();
+                                }
+                                const memories = JSON.parse(jsonStr);
+                                if (Array.isArray(memories) && memories.length > 0) {
+                                    memories.forEach(mem => {
+                                        if (mem.content) {
+                                            addMemory(state.currentRoleId, mem.content, mem.category || '其他');
+                                            savedMemoryCount++;
+                                        }
+                                    });
+                                    console.log(`已保存 ${savedMemoryCount} 条记忆`);
+                                }
+                            } catch (parseError) {
+                                console.warn('记忆解析失败:', parseError);
+                            }
+                        }
+                    }
+                } catch (memoryError) {
+                    console.warn('提取记忆失败:', memoryError);
+                    // 记忆提取失败不影响压缩流程
+                }
+
                 // 创建新的对话历史：摘要 + 最近消息
                 const compressedHistory = [
                     { role: 'system', content: summary, isCompressed: true },
@@ -1465,7 +1528,8 @@
                 saveChatHistory();
                 renderMessages();
 
-                alert(`压缩完成！\n原有 ${msgCount} 条消息 → 现有 ${compressedHistory.length} 条（含1条摘要）`);
+                const memoryInfo = savedMemoryCount > 0 ? `\n已保存 ${savedMemoryCount} 条重要记忆` : '';
+                alert(`压缩完成！\n原有 ${msgCount} 条消息 → 现有 ${compressedHistory.length} 条（含1条摘要）${memoryInfo}`);
 
             } catch (error) {
                 console.error('Compress Error:', error);
