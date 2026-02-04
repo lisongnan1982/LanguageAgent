@@ -1407,11 +1407,50 @@
                     return;
                 }
 
-                // 格式化要压缩的对话
-                const conversationText = toCompress.map(m => {
+                // 检查是否有之前已压缩的摘要
+                const previousSummary = toCompress.find(m => m.isCompressed && m.role === 'system');
+                const regularMessages = toCompress.filter(m => !m.isCompressed);
+
+                // 如果只有之前的摘要，没有新的对话需要压缩
+                if (regularMessages.length === 0 && previousSummary) {
+                    alert('没有新的对话需要压缩');
+                    return;
+                }
+
+                // 格式化要压缩的对话（不包括之前的摘要）
+                const conversationText = regularMessages.map(m => {
                     const speaker = m.role === 'user' ? '用户' : role.name;
                     return `${speaker}：${m.content}`;
                 }).join('\n');
+
+                // 构建 LLM 提示，如果有之前的摘要则包含进去
+                let systemPrompt = `你是一个对话摘要助手。请将以下角色扮演对话历史压缩成一个简洁的摘要，保留关键信息、重要事件、角色关系发展和情感变化。
+
+角色设定：${role.name} - ${role.desc}
+
+要求：
+1. 使用第三人称叙述
+2. 保留对话中的关键剧情点和重要决定
+3. 记录角色之间关系的变化
+4. 摘要应该简洁但信息完整
+5. 用中文输出
+6. 格式：【对话摘要】开头，然后是摘要内容`;
+
+                let userPrompt = '';
+                if (previousSummary) {
+                    // 有之前的摘要，需要将其融合到新摘要中
+                    systemPrompt += `
+7. 重要：下面会提供【之前的历史摘要】和【新的对话内容】，请将两者融合成一个完整的摘要，确保之前摘要中的重要信息不会丢失`;
+                    userPrompt = `【之前的历史摘要】
+${previousSummary.content}
+
+【新的对话内容】
+${conversationText}
+
+请将以上内容融合压缩成一个完整的摘要：`;
+                } else {
+                    userPrompt = `请压缩以下对话历史：\n\n${conversationText}`;
+                }
 
                 // 调用 LLM 生成摘要
                 const response = await fetch('/api/proxy-llm', {
@@ -1423,21 +1462,11 @@
                         messages: [
                             {
                                 role: 'system',
-                                content: `你是一个对话摘要助手。请将以下角色扮演对话历史压缩成一个简洁的摘要，保留关键信息、重要事件、角色关系发展和情感变化。
-
-角色设定：${role.name} - ${role.desc}
-
-要求：
-1. 使用第三人称叙述
-2. 保留对话中的关键剧情点和重要决定
-3. 记录角色之间关系的变化
-4. 摘要应该简洁但信息完整
-5. 用中文输出
-6. 格式：【对话摘要】开头，然后是摘要内容`
+                                content: systemPrompt
                             },
                             {
                                 role: 'user',
-                                content: `请压缩以下对话历史：\n\n${conversationText}`
+                                content: userPrompt
                             }
                         ]
                     })
