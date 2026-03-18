@@ -235,6 +235,14 @@
                     <p class="text-xs text-gray-400 mt-1">Key 将保存在您的浏览器本地存储中</p>
                 </div>
                 <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">API 调用模式</label>
+                    <select id="apiCallMode" class="w-full px-4 py-3 md:py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-base md:text-sm">
+                        <option value="server">🖥️ 服务器代理（默认）</option>
+                        <option value="client">🌐 客户端直连</option>
+                    </select>
+                    <p class="text-xs text-gray-400 mt-1">客户端直连模式跳过服务器，直接调用 OpenRouter API，延迟更低。图片生成工具仍需服务器。</p>
+                </div>
+                <div>
                     <label class="block text-sm font-medium text-gray-700 mb-1">模型列表</label>
                     <input type="text" id="modelSearch" placeholder="搜索模型 (如: gpt-4, claude)..."
                            class="w-full px-4 py-3 md:py-2 border border-gray-300 rounded-t-lg focus:ring-2 focus:ring-blue-500 outline-none border-b-0 text-base md:text-sm">
@@ -628,6 +636,7 @@
         // State Management
         const state = {
             apiKey: localStorage.getItem('openrouter_api_key') || '',
+            apiCallMode: localStorage.getItem('api_call_mode') || 'server',
             selectedModel: localStorage.getItem('selected_model') || 'x-ai/grok-4.1-fast',
             roleGenModel: localStorage.getItem('role_gen_model') || 'x-ai/grok-4.1-fast',
             chatModel: localStorage.getItem('chat_model') || 'google/gemini-2.5-flash-preview',
@@ -760,6 +769,7 @@
             closeSettingsDesktop: document.getElementById('closeSettingsDesktop'),
             saveSettings: document.getElementById('saveSettings'),
             apiKeyInput: document.getElementById('apiKeyInput'),
+            apiCallMode: document.getElementById('apiCallMode'),
             verifyKey: document.getElementById('verifyKey'),
             modelSearch: document.getElementById('modelSearch'),
             modelSelect: document.getElementById('modelSelect'),
@@ -883,6 +893,7 @@
             }
 
             elements.apiKeyInput.value = state.apiKey;
+            elements.apiCallMode.value = state.apiCallMode;
             elements.volcAppId.value = state.volcAppId;
             elements.volcToken.value = state.volcToken;
             elements.volcTtsToken.value = state.volcTtsToken;
@@ -1004,12 +1015,14 @@
 
             elements.settingsBtn.onclick = () => {
                 elements.apiKeyInput.value = state.apiKey;
+                elements.apiCallMode.value = state.apiCallMode;
                 elements.settingsModal.classList.remove('hidden');
             };
             elements.closeSettings.onclick = () => elements.settingsModal.classList.add('hidden');
             elements.closeSettingsDesktop.onclick = () => elements.settingsModal.classList.add('hidden');
             elements.saveSettings.onclick = () => {
                 state.apiKey = elements.apiKeyInput.value;
+                state.apiCallMode = elements.apiCallMode.value;
                 state.selectedModel = elements.modelSelect.value;
                 state.roleGenModel = elements.roleGenModel.value || state.roleGenModel;
                 state.chatModel = elements.chatModel.value || state.chatModel;
@@ -1035,6 +1048,7 @@
                 state.bigmodelAccessKey = elements.bigmodelAccessKey.value;
 
                 localStorage.setItem('openrouter_api_key', state.apiKey);
+                localStorage.setItem('api_call_mode', state.apiCallMode);
                 localStorage.setItem('selected_model', state.selectedModel);
                 localStorage.setItem('role_gen_model', state.roleGenModel);
                 localStorage.setItem('chat_model', state.chatModel);
@@ -1363,6 +1377,81 @@
             `).join('');
         }
 
+        // 统一 LLM 调用函数：根据设置决定走服务端代理还是客户端直连
+        async function callLLM({ apiKey, model, messages, response_format, tools, tool_choice, replicateToken, replicateModel }) {
+            // 判断是否需要服务端：有 tools 包含 generate_image 且有 replicateToken 时需要服务端处理
+            const needsServer = tools && tools.some(t => t.function?.name === 'generate_image') && replicateToken;
+
+            if (state.apiCallMode === 'client' && !needsServer) {
+                // 客户端直连 OpenRouter
+                const requestBody = { model, messages };
+                if (response_format) requestBody.response_format = response_format;
+
+                // 客户端模式下只保留非 generate_image 工具（如 save_memory 可在前端处理）
+                if (tools && tools.length > 0) {
+                    const clientTools = tools.filter(t => t.function?.name !== 'generate_image');
+                    if (clientTools.length > 0) {
+                        requestBody.tools = clientTools;
+                        if (tool_choice) requestBody.tool_choice = tool_choice;
+                    }
+                }
+
+                const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${apiKey}`,
+                        'Content-Type': 'application/json',
+                        'HTTP-Referer': 'https://github.com/nicekwell/LanguageAgent',
+                        'X-Title': 'RolePlay Chat'
+                    },
+                    body: JSON.stringify(requestBody)
+                });
+
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.error?.message || `HTTP error! status: ${response.status}`);
+                }
+
+                const data = await response.json();
+
+                // 客户端处理 save_memory tool call
+                if (data.choices?.[0]?.message?.tool_calls) {
+                    const toolCalls = data.choices[0].message.tool_calls;
+                    const toolResults = [];
+                    for (const tc of toolCalls) {
+                        if (tc.function.name === 'save_memory') {
+                            const args = JSON.parse(tc.function.arguments);
+                            toolResults.push({
+                                tool_call_id: tc.id,
+                                role: 'tool',
+                                name: 'save_memory',
+                                content: JSON.stringify({ success: true, content: args.content, category: args.category || '其他', message: '记忆已保存' })
+                            });
+                        }
+                    }
+                    if (toolResults.length > 0) {
+                        data.tool_results = toolResults;
+                    }
+                }
+
+                return data;
+            } else {
+                // 服务端代理模式（原有逻辑）
+                const response = await fetch('/api/proxy-llm', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ apiKey, model, messages, response_format, tools, tool_choice, replicateToken, replicateModel })
+                });
+
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.error?.message || errorData.message || `HTTP error! status: ${response.status}`);
+                }
+
+                return await response.json();
+            }
+        }
+
         // 压缩对话历史，使用 LLM 生成摘要以减少上下文长度
         async function compressConversationHistory() {
             if (!state.currentRoleId) {
@@ -1453,30 +1542,21 @@ ${conversationText}
                 }
 
                 // 调用 LLM 生成摘要
-                const response = await fetch('/api/proxy-llm', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        apiKey: state.apiKey,
-                        model: state.chatModel,
-                        messages: [
-                            {
-                                role: 'system',
-                                content: systemPrompt
-                            },
-                            {
-                                role: 'user',
-                                content: userPrompt
-                            }
-                        ]
-                    })
+                const data = await callLLM({
+                    apiKey: state.apiKey,
+                    model: state.chatModel,
+                    messages: [
+                        {
+                            role: 'system',
+                            content: systemPrompt
+                        },
+                        {
+                            role: 'user',
+                            content: userPrompt
+                        }
+                    ]
                 });
 
-                if (!response.ok) {
-                    throw new Error('API 请求失败');
-                }
-
-                const data = await response.json();
                 const summary = data.choices?.[0]?.message?.content;
 
                 if (!summary) {
@@ -1486,16 +1566,13 @@ ${conversationText}
                 // 调用 LLM 提取重要记忆并保存
                 let savedMemoryCount = 0;
                 try {
-                    const memoryResponse = await fetch('/api/proxy-llm', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            apiKey: state.apiKey,
-                            model: state.chatModel,
-                            messages: [
-                                {
-                                    role: 'system',
-                                    content: `你是一个记忆提取助手。请从以下对话历史中提取需要长期记住的重要信息。
+                    const memoryData = await callLLM({
+                        apiKey: state.apiKey,
+                        model: state.chatModel,
+                        messages: [
+                            {
+                                role: 'system',
+                                content: `你是一个记忆提取助手。请从以下对话历史中提取需要长期记住的重要信息。
 
 要求：
 1. 只提取真正重要的信息，如：用户的名字、偏好、重要事件、关键决定等
@@ -1507,17 +1584,15 @@ ${conversationText}
 
 返回格式示例：
 [{"content": "用户叫小明", "category": "用户信息"}, {"content": "用户喜欢蓝色", "category": "偏好设置"}]`
-                                },
-                                {
-                                    role: 'user',
-                                    content: `请从以下对话中提取重要记忆：\n\n${conversationText}`
-                                }
-                            ]
-                        })
+                            },
+                            {
+                                role: 'user',
+                                content: `请从以下对话中提取重要记忆：\n\n${conversationText}`
+                            }
+                        ]
                     });
 
-                    if (memoryResponse.ok) {
-                        const memoryData = await memoryResponse.json();
+                    {
                         const memoryContent = memoryData.choices?.[0]?.message?.content;
                         if (memoryContent) {
                             try {
@@ -1812,28 +1887,15 @@ Respond ONLY with the JSON object. Do not include markdown code blocks.`;
 
             try {
                 console.log('Generating role with model:', state.roleGenModel);
-                const response = await fetch('/api/proxy-llm', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
-                        apiKey: state.apiKey,
-                        model: state.roleGenModel,
-                        messages: [
-                            { role: 'system', content: systemPrompt },
-                            { role: 'user', content: `Idea: ${userIdea}` }
-                        ]
-                    })
+                const data = await callLLM({
+                    apiKey: state.apiKey,
+                    model: state.roleGenModel,
+                    messages: [
+                        { role: 'system', content: systemPrompt },
+                        { role: 'user', content: `Idea: ${userIdea}` }
+                    ]
                 });
 
-                if (!response.ok) {
-                    const errorData = await response.json();
-                    console.error('Proxy Error Response:', errorData);
-                    throw new Error(errorData.error?.message || errorData.message || `HTTP error! status: ${response.status}`);
-                }
-
-                const data = await response.json();
                 if (data.choices && data.choices[0]) {
                     let content = data.choices[0].message.content.trim();
                     // Remove markdown code blocks if present
@@ -2632,26 +2694,15 @@ Respond ONLY with the JSON object. Do not include markdown code blocks.`;
                 renderMessages();
 
                 // 调用 LLM
-                const response = await fetch('/api/proxy-llm', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        apiKey: state.apiKey,
-                        model: state.chatModel,
-                        messages: apiMessages,
-                        tools: [TEXT_TO_IMAGE_TOOL],
-                        tool_choice: 'auto',
-                        replicateToken: state.replicateToken,
-                        replicateModel: state.replicateModel
-                    })
+                let data = await callLLM({
+                    apiKey: state.apiKey,
+                    model: state.chatModel,
+                    messages: apiMessages,
+                    tools: [TEXT_TO_IMAGE_TOOL],
+                    tool_choice: 'auto',
+                    replicateToken: state.replicateToken,
+                    replicateModel: state.replicateModel
                 });
-
-                if (!response.ok) {
-                    const errorData = await response.json();
-                    throw new Error(errorData.error?.message || errorData.message || `HTTP error! status: ${response.status}`);
-                }
-
-                let data = await response.json();
 
                 // 处理工具调用（图片生成）
                 if (data.tool_results && data.tool_results.length > 0) {
@@ -2666,25 +2717,18 @@ Respond ONLY with the JSON object. Do not include markdown code blocks.`;
                         msg.imagePrompt = resultData.prompt;
 
                         // 第二次调用 LLM
-                        const response2 = await fetch('/api/proxy-llm', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({
-                                apiKey: state.apiKey,
-                                model: state.chatModel,
-                                messages: apiMessages
-                            })
+                        const data2 = await callLLM({
+                            apiKey: state.apiKey,
+                            model: state.chatModel,
+                            messages: apiMessages
                         });
 
-                        if (response2.ok) {
-                            const data2 = await response2.json();
-                            if (data2.choices && data2.choices[0]) {
-                                let content = data2.choices[0].message.content;
-                                content = content.replace(/!\[([^\]]*)\]\([^)]+\)/g, '');
-                                content = content.replace(/https?:\/\/[^\s]+\.(png|jpg|jpeg|gif|webp)[^\s]*/gi, '');
-                                content = content.replace(/\n{3,}/g, '\n\n').trim();
-                                msg.content = content;
-                            }
+                        if (data2.choices && data2.choices[0]) {
+                            let content = data2.choices[0].message.content;
+                            content = content.replace(/!\[([^\]]*)\]\([^)]+\)/g, '');
+                            content = content.replace(/https?:\/\/[^\s]+\.(png|jpg|jpeg|gif|webp)[^\s]*/gi, '');
+                            content = content.replace(/\n{3,}/g, '\n\n').trim();
+                            msg.content = content;
                         }
                     } else if (resultData.error) {
                         msg.content = `图片生成失败：${resultData.error}`;
@@ -2760,21 +2804,12 @@ Output ONLY the English prompt, nothing else.`;
 
                 // 先用 LLM 生成图片提示词
                 console.log('Generating image prompt with model:', state.imagePromptModel);
-                const llmResponse = await fetch('/api/proxy-llm', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        apiKey: state.apiKey,
-                        model: state.imagePromptModel,
-                        messages: [{ role: 'user', content: contextPrompt }]
-                    })
+                const llmData = await callLLM({
+                    apiKey: state.apiKey,
+                    model: state.imagePromptModel,
+                    messages: [{ role: 'user', content: contextPrompt }]
                 });
 
-                if (!llmResponse.ok) {
-                    throw new Error('生成图片提示词失败');
-                }
-
-                const llmData = await llmResponse.json();
                 const imagePrompt = llmData.choices?.[0]?.message?.content || msg.content;
 
                 console.log('Generated image prompt:', imagePrompt);
@@ -3262,25 +3297,12 @@ ${conversationText}
                 console.log('Auto reply with model:', state.chatModel);
                 console.log('Auto reply messages:', JSON.stringify(messages, null, 2));
 
-                const response = await fetch('/api/proxy-llm', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        apiKey: state.apiKey,
-                        model: state.chatModel,
-                        messages: messages
-                    })
+                const data = await callLLM({
+                    apiKey: state.apiKey,
+                    model: state.chatModel,
+                    messages: messages
                 });
 
-                console.log('Auto reply response status:', response.status);
-
-                if (!response.ok) {
-                    const errorData = await response.json();
-                    console.error('Auto reply error response:', errorData);
-                    throw new Error(errorData.error?.message || errorData.message || `HTTP error! status: ${response.status}`);
-                }
-
-                const data = await response.json();
                 console.log('Auto reply response data:', JSON.stringify(data, null, 2));
 
                 if (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) {
@@ -3430,28 +3452,15 @@ ${conversationText}
             try {
                 // 第一次调用 LLM，提供工具
                 console.log('Chat with model:', state.chatModel);
-                let response = await fetch('/api/proxy-llm', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
-                        apiKey: state.apiKey,
-                        model: state.chatModel,
-                        messages: messages,
-                        tools: [TEXT_TO_IMAGE_TOOL, MEMORY_TOOL],
-                        tool_choice: 'auto',
-                        replicateToken: state.replicateToken,
-                        replicateModel: state.replicateModel
-                    })
+                let data = await callLLM({
+                    apiKey: state.apiKey,
+                    model: state.chatModel,
+                    messages: messages,
+                    tools: [TEXT_TO_IMAGE_TOOL, MEMORY_TOOL],
+                    tool_choice: 'auto',
+                    replicateToken: state.replicateToken,
+                    replicateModel: state.replicateModel
                 });
-
-                if (!response.ok) {
-                    const errorData = await response.json();
-                    throw new Error(errorData.error?.message || errorData.message || `HTTP error! status: ${response.status}`);
-                }
-
-                let data = await response.json();
 
                 // 检查是否有工具调用
                 if (data.tool_results && data.tool_results.length > 0) {
@@ -3477,23 +3486,12 @@ ${conversationText}
                             console.log('Memory saved to localStorage:', resultData.content);
                         }
                         // 继续调用 LLM 生成正常回复
-                        response = await fetch('/api/proxy-llm', {
-                            method: 'POST',
-                            headers: {
-                                'Content-Type': 'application/json'
-                            },
-                            body: JSON.stringify({
-                                apiKey: state.apiKey,
-                                model: state.chatModel,
-                                messages: messages
-                            })
+                        data = await callLLM({
+                            apiKey: state.apiKey,
+                            model: state.chatModel,
+                            messages: messages
                         });
 
-                        if (!response.ok) {
-                            throw new Error('Second LLM call failed');
-                        }
-
-                        data = await response.json();
                         if (data.choices && data.choices[0]) {
                             aiMsg.content = data.choices[0].message.content;
                         }
@@ -3509,23 +3507,12 @@ ${conversationText}
                             renderMessages();
 
                             // 第二次调用 LLM，让它根据工具结果生成回复
-                            response = await fetch('/api/proxy-llm', {
-                                method: 'POST',
-                                headers: {
-                                    'Content-Type': 'application/json'
-                                },
-                                body: JSON.stringify({
-                                    apiKey: state.apiKey,
-                                    model: state.chatModel,
-                                    messages: messages
-                                })
+                            data = await callLLM({
+                                apiKey: state.apiKey,
+                                model: state.chatModel,
+                                messages: messages
                             });
 
-                            if (!response.ok) {
-                                throw new Error('Second LLM call failed');
-                            }
-
-                            data = await response.json();
                             if (data.choices && data.choices[0]) {
                                 // 移除 LLM 返回内容中的 markdown 图片（避免重复显示）
                                 let content = data.choices[0].message.content;
@@ -4521,21 +4508,12 @@ ${conversationText}
                 ...regularMessages.map(m => ({ role: m.role, content: m.content }))
             ];
 
-            const response = await fetch('/api/proxy-llm', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    apiKey: state.apiKey,
-                    model: state.chatModel,
-                    messages: apiMessages
-                })
+            const data = await callLLM({
+                apiKey: state.apiKey,
+                model: state.chatModel,
+                messages: apiMessages
             });
 
-            if (!response.ok) {
-                throw new Error('LLM API 请求失败');
-            }
-
-            const data = await response.json();
             const assistantMessage = data.choices?.[0]?.message?.content || null;
 
             if (assistantMessage) {
